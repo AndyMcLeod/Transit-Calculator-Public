@@ -1,0 +1,1768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Transit Calculator</title>
+<style>
+/* Palette lifted from the ASV console so the two tools read as one family. */
+:root{
+  --abyss:#05080c; --hull:#0a1119; --line:#16222e; --line2:#22323f;
+  --ink:#d7e3ea; --ink-dim:#8ba0ad; --ink-faint:#54697a; --bronze:#c8862b;
+  --ok:#3fbf6b; --warn:#d99a2b; --bad:#d9534f; --track:#39c0ff; --asv:#ffcf3f;
+  --mono:'SFMono-Regular',ui-monospace,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--abyss);color:var(--ink);font-family:var(--sans);overflow:hidden}
+/* width/height are NOT redundant with inset:0. A canvas is a REPLACED element, and
+   an absolutely-positioned replaced box with width:auto resolves to its INTRINSIC
+   size (300x150) instead of stretching to the insets — so the map silently rendered
+   into a small box in the corner until these were added. */
+#map{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+.panel{position:absolute;background:rgba(10,17,25,.94);border:1px solid var(--line2);
+  border-radius:4px;padding:8px;backdrop-filter:blur(4px);z-index:5}
+.ptitle{font-family:var(--mono);font-size:9px;color:var(--ink-dim);text-transform:uppercase;
+  letter-spacing:.08em;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+/* The status bar is pinned to the bottom and floats OVER the panels, so a panel
+   sized to the whole window ends underneath it: the last export button — CSV, leg
+   table — could only be pressed by luck. The panels stop short of the bar instead.
+   --status-h is measured at runtime because the bar WRAPS on a narrow window, so
+   its height is not a constant to hard-code here. The fallback is one unwrapped
+   row, which is what it is at any ordinary width. */
+#left{left:12px;top:12px;width:250px;overflow-y:auto;
+  max-height:calc(100vh - 32px - var(--status-h, 26px))}
+#right{right:12px;top:12px;width:390px;overflow-y:auto;
+  max-height:calc(100vh - 32px - var(--status-h, 26px))}
+#status{left:12px;bottom:12px;right:12px;padding:5px 10px;font-family:var(--mono);font-size:10px;
+  color:var(--ink-dim);display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+button.ctl{background:#111c26;border:1px solid var(--line2);color:var(--ink);border-radius:3px;
+  padding:5px 8px;font-family:var(--mono);font-size:10px;cursor:pointer;letter-spacing:.04em}
+button.ctl:hover:not(:disabled){border-color:var(--track);color:#fff}
+button.ctl:disabled{opacity:.35;cursor:not-allowed}
+button.ctl.on{background:#123044;border-color:var(--track);color:#fff}
+button.ctl.punch{background:#2a1a06;border-color:var(--bronze);color:var(--asv)}
+button.ctl.punch:hover:not(:disabled){background:#3a2408}
+.row{display:flex;gap:5px;margin-bottom:5px}
+.row>*{flex:1}
+label{font-family:var(--mono);font-size:9px;color:var(--ink-dim);text-transform:uppercase;letter-spacing:.05em}
+.frow{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+.frow label{flex:0 0 92px}
+input,select{background:#0b1620;border:1px solid var(--line2);color:var(--ink);border-radius:3px;
+  padding:4px 5px;font-family:var(--mono);font-size:10px;width:100%}
+input:focus,select:focus{outline:none;border-color:var(--track)}
+input[type=checkbox]{width:auto;accent-color:var(--track)}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:9.5px}
+th{color:var(--ink-faint);font-weight:400;text-align:right;padding:3px 4px;border-bottom:1px solid var(--line2);
+  text-transform:uppercase;font-size:8.5px;letter-spacing:.04em;position:sticky;top:0;background:#0a1119}
+td{text-align:right;padding:3px 4px;border-bottom:1px solid var(--line);color:var(--ink)}
+td.l,th.l{text-align:left}
+tr.tot td{border-top:1px solid var(--line2);border-bottom:none;color:var(--asv);font-weight:600;padding-top:5px}
+tr.gap td{color:var(--warn)}
+tr:hover td{background:#0e1a24}
+.hint{font-family:var(--mono);font-size:9px;color:var(--ink-faint);line-height:1.45;margin-top:5px}
+.chip{display:inline-block;padding:1px 5px;border-radius:2px;font-family:var(--mono);font-size:8.5px;
+  border:1px solid var(--line2);color:var(--ink-dim)}
+.chip.ok{color:var(--ok);border-color:#1d4a30}
+.chip.warn{color:var(--warn);border-color:#4a3a12}
+.chip.bad{color:var(--bad);border-color:#4a1d1d}
+.big{font-family:var(--mono);font-size:19px;color:var(--asv);letter-spacing:-.01em}
+.sub{font-family:var(--mono);font-size:9px;color:var(--ink-dim)}
+.stat{display:flex;gap:14px;margin:6px 0 8px;flex-wrap:wrap}
+.stat>div{min-width:64px}
+hr{border:none;border-top:1px solid var(--line);margin:8px 0}
+.scroll{max-height:230px;overflow-y:auto}
+#zoomctl{position:absolute;right:12px;bottom:44px;display:flex;flex-direction:column;gap:3px;z-index:5}
+#zoomctl button{width:26px;height:26px;padding:0;font-size:14px}
+.err{color:var(--bad);font-family:var(--mono);font-size:9px;margin-top:5px}
+details summary{font-family:var(--mono);font-size:9px;color:var(--ink-dim);cursor:pointer;
+  text-transform:uppercase;letter-spacing:.05em;padding:3px 0}
+progress{width:100%;height:4px}
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+<div id="zoomctl">
+  <button class="ctl" id="zin" title="Zoom in — or scroll the chart, which keeps the point under the cursor still">+</button>
+  <button class="ctl" id="zout" title="Zoom out — or scroll the chart, which keeps the point under the cursor still">&minus;</button>
+  <button class="ctl" id="zfit" title="Fit the whole line in the window">&#9635;</button>
+</div>
+
+<div class="panel" id="left">
+  <div class="ptitle"><span>Transit line</span>
+    <span class="chip" id="ptcount" title="Waypoints in the line. Two points is one leg.">0 pts</span></div>
+  <div class="row">
+    <button class="ctl on" id="drawBtn" title="DRAW mode — click the chart to drop transit points">DRAW</button>
+    <button class="ctl" id="panBtn" title="PAN mode — drag to move the chart without adding points">PAN</button>
+  </div>
+  <div class="row">
+    <button class="ctl" id="undoBtn" title="Remove the last point dropped (Ctrl+Z does the same)">Undo</button>
+    <button class="ctl" id="clrBtn" title="Discard the whole line and any result computed from it">Clear</button>
+  </div>
+  <div class="hint" id="dirHint"
+    title="Where the line starts and ends, and the overall heading in degrees TRUE (°T) — referred to true north, not magnetic. Every bearing in this tool is true."></div>
+  <div class="hint" id="drawHint">Click the chart to drop points. Drag a point to move it;
+    click one and press Delete to remove it.</div>
+  <hr/>
+  <div class="ptitle"><span>Load a line</span></div>
+  <select id="sampleSel" title="Lines found on disk beside this tool. Pick one and press Load; choose “file on disk” to browse for your own instead.">
+    <option value="" title="Browse for a file yourself instead of using one of the lines found beside this tool">— file on disk —</option></select>
+  <div class="row" style="margin-top:5px">
+    <button class="ctl" id="loadBtn"
+      title="Load the selected line. With no line selected this opens the file picker.">Load</button>
+    <button class="ctl" id="fileBtn"
+      title="Browse for a line file on this machine. Its coordinates are converted to WGS84 lat/lon on the way in, so a UTM shapefile lands in the right place.">Upload…</button>
+  </div>
+  <input type="file" id="fileIn" style="display:none" accept=".shp,.zip,.geojson,.json,.gpx,.csv"/>
+  <div class="hint" title="ESRI Shapefile — .shp is the geometry and .prj the coordinate reference system, and without the .prj there is no way to know what the numbers mean. GPX is the GPS exchange format a chartplotter reads; CSV is a plain comma-separated table with latitude and longitude columns.">Shapefile
+    (.shp needs its .prj — or drop the whole set as a .zip), GeoJSON, GPX or CSV.</div>
+  <div id="loadInfo"></div>
+  <!-- REVERSE sits here, below the line's own controls and above the downloads:
+       it is the last decision about the geometry before you go and fetch data
+       scoped to it. -->
+  <button class="ctl" id="revBtn" style="width:100%;margin-top:6px"
+    title="Run the line the other way. With a tidal current the two directions are different passages — the ebb you carry out is the flood you punch home — so this recomputes, it does not just relabel. START and END swap on the chart, and any result on screen is dropped rather than left describing the other direction.">&#8646; REVERSE &mdash; run the other way</button>
+  <hr/>
+  <div class="ptitle"><span>Localize for offline</span></div>
+  <div class="row">
+    <button class="ctl" id="chartBtn"
+      title="Download NOAA ENC tiles covering this line, so the chart still draws with no network. ENC = Electronic Navigational Chart.">Charts</button>
+    <button class="ctl" id="curBtn"
+      title="Download the ocean-current forecast for this line's extent, chaining however many models it takes to cover it. OFS = Operational Forecast System, NOAA's regional current models — each covers one region and stops at a hard edge, which is why more than one may be needed.">Currents</button>
+  </div>
+  <div id="jobBox"></div>
+  <div class="hint" id="cacheHint"
+    title="How much of this line's extent is already on disk, by zoom level: z8 is coarse and z12 is close in. Below 100% the chart still draws — the missing tiles come from NOAA when there is a network, and are simply blank when there is not."></div>
+  <hr/>
+  <!-- THE EMERGENCY CASE. Deliberately not folded into the passage panel: a drift
+       is not a plan, and the settings that matter here — leeway, the wind, the time
+       of loss — are not the ones that matter there. It starts from a POSITION
+       rather than a line, which is why it lives on this side. -->
+  <div class="ptitle"><span style="color:var(--bad)">Emergency &mdash; drift</span>
+    <span class="chip" id="driftChip" title="Whether a last known position has been set">no position</span></div>
+  <button class="ctl" id="driftPickBtn" style="width:100%"
+    title="Arm the chart: the next click sets the LAST KNOWN POSITION of the disabled vessel. Press again to cancel.">Set last known position</button>
+  <div class="frow" style="margin-top:5px"><label title="Latitude, decimal degrees north, WGS84">Lat</label>
+    <input type="number" id="dLat" step="0.0001" placeholder="38.8000"
+      title="Latitude of the last known position, decimal degrees north."/></div>
+  <div class="frow"><label title="Longitude, decimal degrees east — negative west of Greenwich">Lon</label>
+    <input type="number" id="dLon" step="0.0001" placeholder="-75.1000"
+      title="Longitude of the last known position, decimal degrees east; negative for west."/></div>
+  <div class="frow"><label title="UTC time the vessel was last known to be at that position">Lost UTC</label>
+    <input type="datetime-local" id="dWhen"
+      title="When the vessel was last known to be there. The tide at that hour is what starts the drift, so this matters as much as the position does."/></div>
+  <div class="frow"><label title="How far ahead to predict, in hours">Hours</label>
+    <input type="number" id="dHours" value="24" min="1" max="336" step="1"
+      title="How far ahead to predict. The cached forecast runs out long before the maximum — the result says when, rather than drawing past its own data."/></div>
+  <div class="frow"><label title="Which published leeway class to drift the hull as">Drifts as</label>
+    <select id="dClass"
+      title="The USCG leeway class used for the wind term. NO CLASS EXISTS FOR AN UNMANNED SURFACE VESSEL — the taxonomy's 85 categories are people, rafts and boats — so this is an analogue, not a measurement of this hull. Each class brings its own downwind and crosswind coefficients AND its own measured spread, which is where most of the search radius comes from."></select></div>
+  <div class="hint" id="dClassInfo"></div>
+  <!-- COMPARING CLASSES IS THE HONEST USE OF A TAXONOMY WITH NO ENTRY FOR THIS
+       VESSEL. How far the answer moves when you pick a different analogue is itself
+       a result, and on this coast it moves as much as the radius does. -->
+  <div class="ptitle" style="margin-top:6px"><span>Compare classes</span></div>
+  <div id="dCompareList" class="scroll" style="max-height:92px;margin-bottom:4px"></div>
+  <button class="ctl" id="dCompareBtn" style="width:100%"
+    title="Run the ticked classes from the same position, time and weather, and show every datum and radius together. The chosen class is an analogue — how much the answer moves when you change it is worth seeing before you commit search effort to any one circle.">COMPARE TICKED CLASSES</button>
+  <div class="frow"><label title="Wind used for the leeway term: speed in knots, then the direction it blows FROM">Wind</label>
+    <span style="display:flex;gap:4px;align-items:center;flex:1">
+      <input type="number" id="dWind" value="12" min="0" max="80" step="1"
+        title="Wind speed in knots, held for the whole prediction. Over days that is a strong assumption, and it is listed with the result."/>
+      <input type="number" id="dWindDir" value="200" min="0" max="359" step="5"
+        title="Direction the wind blows FROM, degrees true. The hull goes toward the reciprocal, off by the divergence angle."/>
+    </span></div>
+  <!-- SWELL, OPTIONAL. Left blank there is no wave term at all. Only the part of
+       the wave transport that is NOT running with the wind is used — the rest is
+       already inside the leeway coefficients. -->
+  <div class="frow"><label title="Swell: significant height, period, and the direction it comes FROM. Leave blank for no wave term.">Swell</label>
+    <span style="display:flex;gap:4px;align-items:center;flex:1">
+      <input type="number" id="dHs" min="0" max="20" step="0.1" placeholder="Hs m"
+        title="Significant wave height in metres. Leave blank and no wave transport is computed at all."/>
+      <input type="number" id="dTp" min="1" max="30" step="0.5" placeholder="T s"
+        title="Wave period in seconds. Stokes drift goes as the CUBE of frequency, so the period matters more than the height: a short steep sea carries far more than a long swell of the same height."/>
+      <input type="number" id="dWvDir" min="0" max="359" step="5" placeholder="from°"
+        title="Direction the swell comes FROM, degrees true. If it runs with the wind the term contributes nothing, because the leeway coefficients already hold the wind-driven waves; across or against the wind it counts in full."/>
+    </span></div>
+  <button class="ctl punch" id="driftBtn" style="width:100%;margin-top:4px"
+    title="Predict where the hull goes, with the spread of the stated assumptions around it. The answer is a datum and a radius, not a position.">PREDICT DRIFT</button>
+  <button class="ctl" id="driftClrBtn" style="width:100%;margin-top:4px;display:none"
+    title="Remove the drift prediction from the chart">Clear drift</button>
+  <div id="driftErr"></div>
+</div>
+
+<div class="panel" id="right">
+  <div class="ptitle"><span>Passage</span><span id="modelChip" class="chip"></span></div>
+  <div class="frow" id="speedRow"><label title="Speed in knots — nautical miles per hour">Speed kt</label><input type="number" id="speed" value="8" min="0.5" max="20" step="0.5"
+    title="The speed the setting below names — through the water, or over the ground."/></div>
+  <!-- Fixed revs: the throttle is the input and the speed is an OUTPUT. Shown only
+       in that mode, because a speed box that is being ignored is worse than no box. -->
+  <div class="frow" id="rpmRow" style="display:none">
+    <label title="RPM — engine revolutions per minute">Revs</label>
+    <input type="number" id="rpm" value="1650" min="600" max="3200" step="10"
+      title="The revs the boat is holding. The vessel model turns these into a speed through the water — which is NOT the speed its own controller may be assuming for the same revs, and that difference is the reason this mode exists."/></div>
+  <div class="frow"><label>Speed is</label>
+    <select id="mode" title="Through water: you name the water speed and the current decides the clock. Over ground: the arrival time is fixed and the current decides the revs, and therefore the fuel. Fixed revs: you name the throttle and the model decides the speed — which is what an ASV holding revs actually does.">
+      <option value="stw" title="STW — speed through the water. You name it; the model works out the revs to hold it.">through water (set revs)</option>
+      <option value="sog" title="SOG — speed over the ground. ETA = estimated time of arrival. The current then decides the revs and the fuel.">over ground (fixed ETA)</option>
+      <option value="rpm" title="The throttle is held and the SPEED is the answer. Weather costs TIME in this mode, not fuel: litres per hour is fixed by the revs, so a head sea makes the passage longer rather than dearer.">fixed revs (hold the throttle)</option>
+    </select></div>
+  <div class="frow"><label title="UTC — Coordinated Universal Time. Every clock in this tool is UTC; nothing is shown in local time.">Depart UTC</label><input type="datetime-local" id="dep"
+    title="Departure, UTC. It matters: the tide turns about every six hours and this passage takes most of ten, so the same line at a different hour is a different passage."/></div>
+  <div class="frow"><label>Config</label><select id="config"
+    title="Which sonar config is fitted. It changes the drag, and so the revs and the burn, at every speed."></select></div>
+  <div class="frow"><label>Fuel aboard</label>
+    <span style="display:flex;gap:5px;align-items:center;flex:1">
+      <!-- Fuel actually in the tank at departure. Blank = full, which is what this
+           assumed before the field existed, so an operator who ignores it gets the
+           old behaviour. The reserve floor stays a fraction of the TANK — see
+           fuel.endurance. -->
+      <input type="number" id="onboard" min="0" step="1" placeholder="full tank" style="flex:1"
+        title="Litres in the tank at departure. Leave blank for a full tank. The reserve floor is a fraction of the TANK, not of what you loaded, so sailing part-full takes the whole shortfall out of your usable fuel — not a quarter of it."/>
+      <span class="sub" id="tankHint" style="white-space:nowrap"
+        title="Litres, against the tank volume from the vessel model"></span>
+    </span></div>
+  <div class="frow"><label>Currents</label>
+    <span style="display:flex;gap:4px;align-items:center;flex:1">
+      <input type="checkbox" id="useCur" checked
+        title="Untick to compute in still water. The difference between the two is the tide's whole contribution."/>
+      <select id="cycleSel" style="flex:1"
+        title="Which cached forecast to use. “All models (chained)” is the default because one OFS covers one region — forcing a single cycle re-opens the domain gap the chaining was there to close."></select>
+    </span></div>
+  <div class="frow"><label>Weather</label>
+    <select id="wxMode" title="Where wind and sea state come from. Fetching interpolates buoys, NWS gridpoints and WAVEWATCH III over the whole line, per variable, so a buoy with a dead wave sensor still contributes its wind.">
+      <option value="fetch" title="IDW = inverse distance weighting: each point on the line takes a weighted mean of the nearby sources, the closest counting most. NWS = National Weather Service gridpoint forecast; WW3 = WAVEWATCH III, NOAA's global wave model; the buoys are NDBC (National Data Buoy Center).">IDW over the line (buoys + NWS + WW3)</option>
+      <option value="manual" title="One wind and sea state you type, applied to every leg">enter below</option>
+      <option value="none" title="Flat calm — no sea-state or heading premium at all. The floor the other two are measured against.">ignore (benign)</option>
+    </select></div>
+  <div id="wxManual" style="display:none">
+    <div class="frow"><label title="WMO sea state — the World Meteorological Organization's 0–9 scale, from calm-glassy to phenomenal">Sea state</label><select id="wmo"
+      title="WMO sea state, applied to every leg. It sets a fractional premium on the revs, and the burn is convex in revs."></select></div>
+    <div class="frow"><label title="Wind speed in knots">Wind kt</label><input type="number" id="wind" value="12" min="0" max="60" step="1"
+      title="Wind speed, applied to every leg. The heading premium scales with the square of it."/></div>
+    <div class="frow"><label title="Degrees true, 0 = north, clockwise">Wind from °</label><input type="number" id="windDir" value="200" min="0" max="359" step="5"
+      title="The direction the wind blows FROM, true. Equal to the course means a headwind — the opposite of the current convention, which names where the water goes TO."/></div>
+  </div>
+  <button class="ctl punch" id="calcBtn" style="width:100%;margin-top:4px" disabled
+    title="March the line in half-mile steps, evaluating the current at each position and the clock time it is reached, and cost the result against the vessel model.">CALCULATE</button>
+  <div id="err"></div>
+
+  <!-- Drift output sits ABOVE the passage results: if a drift has been run, it is
+       because something has gone wrong, and it should not be below a fuel table. -->
+  <div id="driftOut" style="display:none">
+    <hr/>
+    <div class="ptitle"><span style="color:var(--bad)">Drift prediction</span>
+      <span class="chip" id="driftSrc"></span></div>
+    <div class="stat">
+      <div title="Straight-line distance from the last known position to the datum at the end of the prediction">
+        <div class="big" id="dvDist">—</div><div class="sub">NM from LKP</div></div>
+      <div title="True bearing from the last known position to the datum">
+        <div class="big" id="dvBrg">—</div><div class="sub">&deg;T</div></div>
+      <div title="Radius around the datum containing every member of the ensemble. This is the spread of the stated assumptions, NOT a probability.">
+        <div class="big" id="dvRad">—</div><div class="sub">NM radius</div></div>
+    </div>
+    <div id="dvFlags" style="margin-bottom:6px"></div>
+    <div class="scroll" style="max-height:180px">
+      <table id="dvTable">
+        <thead><tr>
+          <th class="l" title="Hours since the vessel was lost">+h</th>
+          <th title="UTC time">UTC</th>
+          <th title="Datum latitude — the position the middle of every assumption gives">Lat</th>
+          <th title="Datum longitude">Lon</th>
+          <th title="Distance from the last known position to the datum">NM</th>
+          <th title="True bearing from the last known position">Brg</th>
+          <th title="Radius around the datum holding the whole ensemble. Search area, not error bar.">±NM</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="dvCompare" style="display:none">
+      <hr/>
+      <div class="ptitle"><span>Drift models compared</span>
+        <span class="chip" id="dvCmpFixed"
+          title="Every row was run from the same last known position, the same time of loss, the same wind and swell, and the same cached forecast. The ONLY thing that changes between rows is the drift model, so every difference below is attributable to it.">environment held fixed</span></div>
+      <table id="dvCmpTable">
+        <thead><tr>
+          <th class="l" title="The leeway class used for the wind term">Class</th>
+          <th title="Distance from the last known position to that class's datum">NM</th>
+          <th title="True bearing from the last known position to that class's datum">Brg</th>
+          <th title="Search radius that class produces — driven by the measured spread of its coefficients">±NM</th>
+          <th title="How far that class's datum sits from the primary class's datum. This is the cost of choosing wrong.">Δ prim</th>
+          <th title="Standard error of that class's downwind regression, in cm/s. It is what sets the radius.">Spread</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="dvCmpNote" class="hint"></div>
+    </div>
+    <div id="dvAssume" class="hint"></div>
+    <div class="row" style="margin-top:5px">
+      <button class="ctl" id="dvCsv"
+        title="Download the datum table as CSV — hours, UTC, position, distance, bearing and radius.">CSV</button>
+      <button class="ctl" id="dvJson"
+        title="Download the whole prediction as GeoJSON: the datum track, the hourly datums with their radii, and every ensemble member's endpoint. Loads straight into a chart plotter or GIS.">GeoJSON</button>
+    </div>
+  </div>
+
+  <div id="results" style="display:none">
+    <hr/>
+    <div class="stat">
+      <div title="Total distance in nautical miles — geodesic, and the one figure here that does not move with the settings">
+        <div class="big" id="rDist">—</div><div class="sub">NM</div></div>
+      <div title="Total passage time, hours:minutes"><div class="big" id="rTime">—</div><div class="sub">h:mm</div></div>
+      <div title="Total fuel burned, litres"><div class="big" id="rFuel">—</div><div class="sub">litres</div></div>
+      <div title="Average speed over the ground in knots — distance divided by time, not the mean of the legs">
+        <div class="big" id="rSog">—</div><div class="sub">avg kt SOG</div></div>
+    </div>
+    <div id="flags" style="margin-bottom:6px"></div>
+    <div class="scroll">
+    <table id="legs">
+      <thead><tr>
+        <th class="l" title="Leg number, counting from START. The same number is boxed beside the leg on the chart — and hovering a row lights that leg white. Note a leg is a SEGMENT, so leg 4 runs from WP4 to WP5.">Leg</th>
+        <th title="Leg length, nautical miles (Vincenty on the WGS84 ellipsoid)">NM</th>
+        <th title="Initial true bearing along the leg">Brg</th>
+        <th title="Average speed over the ground">SOG</th>
+        <th title="Current set: the direction the water flows TOWARD, true">Set</th>
+        <th title="Current drift: how fast the water flows, knots">Dft</th>
+        <th title="Engine revs, benign revs raised by the sea-state and heading premium">RPM</th>
+        <th title="Time on the leg">Time</th>
+        <th title="Litres burned on the leg">L</th>
+        <th title="Arrival at the far end of the leg, UTC">ETA</th>
+        <th title="COVERAGE — percent of the leg a current model actually reached. Below 100, the rest was computed with no current, which is not the same as a current known to be zero.">Cov</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <div id="endur" class="hint"
+      title="How the burn sits against the fuel. Usable is what is aboard less the reserve floor; margin is what is left over. L = litres, L/h = litres per hour, and loiter is the burn sitting still."></div>
+    <button class="ctl" id="cmpBtn" style="width:100%;margin-top:6px"
+      title="Compute the same line run the other way, at the same departure, and show the difference. Neither result is discarded.">&#8646; Compare the other direction</button>
+    <div id="cmpOut" class="hint"></div>
+    <details id="wxDetail" style="display:none"
+      title="Every station and gridpoint that fed the interpolation, with its age and which variables it supplied. NDBC = National Data Buoy Center, NWS = National Weather Service, WW3 = WAVEWATCH III."><summary>Weather sources</summary>
+      <div id="wxSources" class="hint"></div></details>
+    <hr/>
+    <div class="ptitle"><span>Export</span></div>
+    <div class="frow"><label>Name</label><input id="expName" value="transit"
+      title="Base name for the exported file. A UTC timestamp is appended, so exporting twice never overwrites the first one."/></div>
+    <!-- DEFAULTS TO ON. Saving a calculated mission to the folder is the asked-for
+         behaviour; an opt-in you have to notice meant pressing Export quietly put the
+         file in Downloads and left docs/missions empty. Untick for a browser
+         download instead. -->
+    <div class="frow"><label>Save to</label>
+      <span style="display:flex;gap:5px;align-items:center;flex:1">
+        <input type="checkbox" id="saveDisk" checked
+          title="Ticked: the server writes the file to docs/missions beside this tool. Unticked: the same bytes come back as a browser download instead."/>
+        <span class="hint" id="saveWhere" style="margin:0">
+          <b>docs/missions</b> &mdash; untick to download instead</span>
+      </span></div>
+    <div class="frow"><label title="CRS — coordinate reference system: which datum and projection the exported coordinates are written in. UTM = Universal Transverse Mercator.">Shapefile CRS</label>
+      <select id="expCrs" title="Applies to the SHAPEFILE only. GeoJSON, KML and GPX are WGS84 lon/lat by definition, so there is nothing to choose for them.">
+        <option value="" title="WGS84 — the world datum a GPS reports in. Coordinates written as degrees of longitude and latitude.">WGS84 lat/lon</option>
+        <option value="auto" selected title="UTM — Universal Transverse Mercator: metres east and north inside a numbered zone. The zone is taken from the line's own longitude, so the file lands where the survey package expects it.">UTM (zone from the line)</option>
+      </select></div>
+    <div id="expBtns" class="row" style="flex-wrap:wrap"></div>
+  </div>
+</div>
+
+<div class="panel" id="status">
+  <span id="stPos" title="Cursor position — degrees and decimal minutes, N/S then E/W">—</span>
+  <span id="stZoom" title="Chart zoom level: z3 is ocean-wide, z16 is harbour detail. Higher levels hold more tiles and take longer to download.">—</span>
+  <span id="stChart" title="Chart tiles held on disk, including any reachable from the ASV Console's cache, which is read but never written."></span>
+  <span id="stCycle" title="The cached current forecast and the window it covers. The tag is the model run: date, then the hour it was issued — t18z is the 18:00 UTC run."></span>
+  <span id="stMsg" style="margin-left:auto" title="What the tool last did, or the error it hit doing it"></span>
+</div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   Transit Calculator — client
+   The map is a plain canvas over NOAA tiles proxied by our own server. No map
+   library: the projection is twenty lines, and a dependency that has to be
+   vendored for offline use costs more than it saves.
+   ========================================================================== */
+const TILE = 256, $ = s => document.querySelector(s);
+const cvs = $("#map"), ctx = cvs.getContext("2d");
+
+let zoom = 9, center = {lat: 38.55, lon: -74.98};
+let points = [];               // [{lat,lon}] — the transit line
+let mode = "draw";
+let plan = null, summary = null, cfg = null;
+let dragIdx = -1, selIdx = -1, panning = null, moved = false;
+let hoverLeg = -1;             // leg row under the cursor, lit on the chart
+let drift = null;              // the drift prediction, when one has been run
+let pickingLKP = false;        // the next chart click sets a last known position
+const tiles = new Map();       // key -> Image | 'miss'
+
+/* ---- projection ---- */
+const worldPx = (lat, lon, z) => {
+  const s = TILE * Math.pow(2, z), sl = Math.sin(lat * Math.PI / 180);
+  return {x: (lon + 180) / 360 * s,
+          y: (0.5 - Math.log((1 + sl) / (1 - sl)) / (4 * Math.PI)) * s};
+};
+const worldToLL = (x, y, z) => {
+  const s = TILE * Math.pow(2, z), n = Math.PI - 2 * Math.PI * y / s;
+  return {lat: 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))),
+          lon: x / s * 360 - 180};
+};
+const origin = () => {
+  const c = worldPx(center.lat, center.lon, zoom);
+  return {x: c.x - cvs.width / (2 * dpr()), y: c.y - cvs.height / (2 * dpr())};
+};
+const dpr = () => window.devicePixelRatio || 1;
+const toScreen = (lat, lon) => {
+  const w = worldPx(lat, lon, zoom), o = origin();
+  return {x: w.x - o.x, y: w.y - o.y};
+};
+const toLL = (px, py) => { const o = origin(); return worldToLL(o.x + px, o.y + py, zoom); };
+
+/* ---- tiles ---- */
+function tileImg(z, x, y){
+  const k = z + "/" + x + "/" + y;
+  if (tiles.has(k)) { const v = tiles.get(k); return v === "miss" ? null : v; }
+  const im = new Image();
+  tiles.set(k, im);
+  im.onload = () => draw();
+  // A 204 (no chart data here) arrives as a load error; remember it so we do not
+  // re-request an empty tile on every pan.
+  im.onerror = () => { tiles.set(k, "miss"); };
+  im.src = "/tiles/" + k + ".png";
+  return im;
+}
+
+function drawTiles(){
+  const o = origin(), n = Math.pow(2, zoom);
+  const x0 = Math.floor(o.x / TILE), y0 = Math.floor(o.y / TILE);
+  const x1 = Math.floor((o.x + cvs.width / dpr()) / TILE);
+  const y1 = Math.floor((o.y + cvs.height / dpr()) / TILE);
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++){
+    if (y < 0 || y >= n) continue;
+    const im = tileImg(zoom, ((x % n) + n) % n, y);
+    if (im && im.complete && im.naturalWidth)
+      ctx.drawImage(im, x * TILE - o.x, y * TILE - o.y, TILE, TILE);
+  }
+}
+
+function drawGraticule(){
+  // Drawn UNDER the tiles: where a tile is missing (offline, or outside chart
+  // coverage) the operator still gets a scale reference instead of a black hole.
+  const step = zoom >= 11 ? 0.1 : zoom >= 9 ? 0.25 : 1;
+  ctx.strokeStyle = "#0e1a24"; ctx.fillStyle = "#2b3d4c";
+  ctx.lineWidth = 1; ctx.font = "9px monospace";
+  const tl = toLL(0, 0), br = toLL(cvs.width / dpr(), cvs.height / dpr());
+  for (let la = Math.floor(br.lat / step) * step; la <= tl.lat + step; la += step){
+    const y = toScreen(la, tl.lon).y;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cvs.width, y); ctx.stroke();
+    ctx.fillText(la.toFixed(2) + "°", 3, y - 2);
+  }
+  for (let lo = Math.floor(tl.lon / step) * step; lo <= br.lon + step; lo += step){
+    const x = toScreen(tl.lat, lo).x;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cvs.height); ctx.stroke();
+    ctx.fillText(lo.toFixed(2) + "°", x + 3, 10);
+  }
+}
+
+function drawLine(){
+  if (!points.length) return;
+  const pts = points.map(p => toScreen(p.lat, p.lon));
+  if (pts.length > 1){
+    ctx.strokeStyle = "rgba(0,0,0,.55)"; ctx.lineWidth = 5;
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    ctx.strokeStyle = "#39c0ff"; ctx.lineWidth = 2;
+    ctx.beginPath(); pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+    // The row under the cursor lights its own segment. The badge answers "where is
+    // leg 4"; this answers the same question from the other end, without asking the
+    // operator to find a two-character label first.
+    if (hoverLeg >= 0 && hoverLeg + 1 < pts.length){
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(pts[hoverLeg].x, pts[hoverLeg].y);
+      ctx.lineTo(pts[hoverLeg + 1].x, pts[hoverLeg + 1].y);
+      ctx.stroke();
+    }
+    // Per-leg current arrows, once computed: the reason a leg is slow, drawn where
+    // the leg is, rather than left as a number in a table.
+    if (plan) plan.legs.forEach((l, i) => {
+      if (l.set_deg == null || l.drift_kt < 0.05 || i + 1 >= pts.length) return;
+      const mx = (pts[i].x + pts[i+1].x) / 2, my = (pts[i].y + pts[i+1].y) / 2;
+      const r = (l.set_deg - 90) * Math.PI / 180, len = 12 + Math.min(26, l.drift_kt * 16);
+      const ex = mx + Math.cos(r) * len, ey = my + Math.sin(r) * len;
+      ctx.strokeStyle = l.along_kt >= 0 ? "#3fbf6b" : "#d9534f"; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex - Math.cos(r - .4) * 5, ey - Math.sin(r - .4) * 5);
+      ctx.lineTo(ex - Math.cos(r + .4) * 5, ey - Math.sin(r + .4) * 5);
+      ctx.closePath(); ctx.fill();
+    });
+  }
+  // DIRECTION CHEVRONS. Which way the boat runs the line changes the answer — the
+  // ebb you carry out is the flood you punch home — so the direction has to be
+  // readable from the chart itself, not inferred from which dot is green. Chevrons
+  // sit along each leg, spaced in SCREEN pixels so they stay legible at every zoom.
+  if (pts.length > 1){
+    ctx.fillStyle = "#39c0ff";
+    for (let i = 0; i < pts.length - 1; i++){
+      const a = pts[i], b = pts[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 26) continue;                       // too short to carry one legibly
+      const n = Math.min(6, Math.max(1, Math.floor(len / 90)));
+      const ang = Math.atan2(b.y - a.y, b.x - a.x);
+      for (let k = 1; k <= n; k++){
+        const t = k / (n + 1);
+        const cx = a.x + (b.x - a.x) * t, cy = a.y + (b.y - a.y) * t;
+        ctx.save(); ctx.translate(cx, cy); ctx.rotate(ang);
+        ctx.beginPath();
+        ctx.moveTo(6, 0); ctx.lineTo(-4, -4.5); ctx.lineTo(-1.5, 0); ctx.lineTo(-4, 4.5);
+        ctx.closePath();
+        ctx.fillStyle = "#39c0ff"; ctx.fill();
+        ctx.strokeStyle = "rgba(5,8,12,.8)"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Boxes already claimed on screen. The waypoint dots and their labels go down
+  // FIRST and record what they occupy, so the leg badges below can avoid them.
+  // Drawn the other way round, the WP4 label printed straight through badge 3 —
+  // and a half-covered digit is worse than no digit, because it still reads as one.
+  const placed = [];
+  pts.forEach((p, i) => {
+    const first = i === 0, last = i === pts.length - 1;
+    ctx.fillStyle = i === selIdx ? "#fff" : first ? "#3fbf6b" : last ? "#ffcf3f" : "#39c0ff";
+    ctx.strokeStyle = "#05080c"; ctx.lineWidth = 1.5;
+    const rad = (first || last) ? 6 : (i === selIdx ? 6 : 4.5);
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 7);
+    ctx.fill(); ctx.stroke();
+    placed.push({x: p.x - rad - 2, y: p.y - rad - 2, w: rad * 2 + 4, h: rad * 2 + 4});
+    // The ends are NAMED, not colour-coded. "the green one" is not something an
+    // operator should have to remember, or squint at, to know which way the boat runs.
+    if (first || last){
+      const label = first ? "START" : "END";
+      ctx.font = "bold 10px monospace";
+      const w = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(5,8,12,.82)";
+      ctx.fillRect(p.x + 8, p.y - 15, w + 7, 13);
+      ctx.fillStyle = first ? "#3fbf6b" : "#ffcf3f";
+      ctx.fillText(label, p.x + 11, p.y - 5);
+      placed.push({x: p.x + 8, y: p.y - 15, w: w + 7, h: 13});
+    } else if (zoom >= 8){
+      ctx.fillStyle = "#8ba0ad"; ctx.font = "9px monospace";
+      const t = "WP" + (i + 1), w = ctx.measureText(t).width;
+      ctx.fillText(t, p.x + 7, p.y - 5);
+      placed.push({x: p.x + 7, y: p.y - 13, w: w, h: 10});
+    }
+  });
+
+  // LEG NUMBERS, the same numbers the table uses. Without them the operator reads
+  // "leg 4 cannot hold track" and then counts segments to find out where that is —
+  // and counting is where the mistake gets made, because a leg is a SEGMENT and a
+  // waypoint is a POINT, so WP4 is not leg 4.
+  //
+  // Placed at the midpoint and pushed to one SIDE: the midpoint itself already
+  // carries the current arrow, and a badge under an arrowhead is worse than no
+  // badge. The side is chosen against the arrow where there is one.
+  if (pts.length > 1){
+    for (let i = 0; i < pts.length - 1; i++){
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+      // 4 px, not the 14 a badge is tall: the badge does not have to FIT on the leg,
+      // it has to point at it, and the leader below does that. Below a few pixels
+      // two waypoints are visually one and the honest answer is to zoom in — which
+      // also stops a whole line collapsing into a fan of leaders at ocean zoom.
+      if (len < 4) continue;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      let nx = -dy / len, ny = dx / len;         // unit normal to the leg
+      const l = plan && plan.legs[i];
+      if (l && l.set_deg != null && l.drift_kt >= 0.05){
+        // Put the badge on the far side from the current arrow.
+        const r = (l.set_deg - 90) * Math.PI / 180;
+        if (nx * Math.cos(r) + ny * Math.sin(r) > 0){ nx = -nx; ny = -ny; }
+      }
+      const label = String(i + 1);
+      ctx.font = "bold 10px monospace";
+      const tw = ctx.measureText(label).width, bw = tw + 9, bh = 14;
+      // Nearest free position, working outwards. A crowded chart is exactly where
+      // the operator needs the number most — near Lewes four legs are short enough
+      // to collide at low zoom — so a badge that will not fit beside its leg is
+      // PUSHED OUT on a leader rather than dropped. Dropped is what the first
+      // version did, and leg 2 simply vanished from the busiest part of the line.
+      let box = null, off = 13;
+      outer:
+      for (const d of [13, 26, 40, 56]){
+        for (const s of [1, -1]){
+          const cx = mx + nx * s * d, cy = my + ny * s * d;
+          const cand = {x: cx - bw / 2, y: cy - bh / 2, w: bw, h: bh};
+          const clash = placed.some(q => cand.x < q.x + q.w && cand.x + cand.w > q.x &&
+                                         cand.y < q.y + q.h && cand.y + cand.h > q.y);
+          if (!clash){ box = cand; off = d; break outer; }
+        }
+      }
+      if (!box) continue;                        // genuinely nowhere to put it
+      placed.push(box);
+      if (off > 13){
+        // Displaced, so it must SAY which leg it names. Without the leader the
+        // badge is just a number floating near two segments.
+        ctx.strokeStyle = "rgba(57,192,255,.75)"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(box.x + bw / 2, box.y + bh / 2);
+        ctx.stroke();
+      }
+      const hot = i === hoverLeg;
+      ctx.fillStyle = hot ? "#39c0ff" : "rgba(5,8,12,.86)";
+      ctx.strokeStyle = hot ? "#fff" : "#39c0ff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(box.x, box.y, box.w, box.h, 3);
+      else ctx.rect(box.x, box.y, box.w, box.h);
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = hot ? "#05080c" : "#39c0ff";
+      ctx.fillText(label, box.x + (bw - tw) / 2, box.y + 11);
+    }
+  }
+}
+
+/* ---- the drift, on the chart ----
+   Drawn UNDER the transit line so a plan stays readable over it, and drawn in the
+   bad-news colour throughout: nothing here is a route anyone chose. The three
+   layers say different things and are deliberately distinguishable at a glance —
+   the cloud is where the hull could be, the ring is the search circle at the hour
+   you asked about, and the track is only the middle assumption's path. */
+function drawDrift(){
+  if (!drift) return;
+  const s = toScreen(drift.start.lat, drift.start.lon);
+
+  // Every member's path, faint: the spread IS the answer, so it is shown rather
+  // than summarised away into a single confident line.
+  ctx.strokeStyle = "rgba(217,83,79,.20)"; ctx.lineWidth = 1;
+  (drift.member_tracks || []).forEach(t => {
+    ctx.beginPath();
+    t.forEach((p, i) => { const q = toScreen(p.lat, p.lon);
+      i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+    ctx.stroke();
+  });
+
+  // THE SEARCH CIRCLE IS THE PRODUCT. Tinted as an AREA rather than left as a thin
+  // ring: on a NOAA chart, which is already full of magenta rings and dashed
+  // boundaries, an unfilled circle is one more piece of cartography instead of the
+  // answer. A minute of latitude is a nautical mile, which is what makes the radius
+  // convertible to pixels without a second projection.
+  const last = drift.envelope[drift.envelope.length - 1];
+  if (last){
+    const c = toScreen(last.lat, last.lon);
+    const edge = toScreen(last.lat + last.radius_nm / 60.0, last.lon);
+    const rpx = Math.abs(c.y - edge.y);
+    if (rpx > 2){
+      ctx.fillStyle = "rgba(217,83,79,.10)";
+      ctx.beginPath(); ctx.arc(c.x, c.y, rpx, 0, 7); ctx.fill();
+      ctx.strokeStyle = "rgba(217,83,79,.95)"; ctx.lineWidth = 2;
+      ctx.setLineDash([7, 5]);
+      ctx.beginPath(); ctx.arc(c.x, c.y, rpx, 0, 7); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // The nominal track, SOLID to the horizon and DASHED past it. Past the horizon
+  // the line is drawn from no data at all, and it must not look like the rest.
+  const hz = drift.horizon_h;
+  const seg = (from, to, dash) => {
+    ctx.setLineDash(dash ? [4, 4] : []);
+    ctx.strokeStyle = dash ? "rgba(217,83,79,.45)" : "#d9534f";
+    ctx.lineWidth = 2; ctx.beginPath();
+    drift.track.slice(from, to + 1).forEach((p, i) => {
+      const q = toScreen(p.lat, p.lon); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+    ctx.stroke(); ctx.setLineDash([]);
+  };
+  let cut = drift.track.length - 1;
+  if (hz != null){
+    cut = drift.track.findIndex(p => p.t >= hz);
+    if (cut < 0) cut = drift.track.length - 1;
+  }
+  seg(0, cut, false);
+  if (cut < drift.track.length - 1) seg(cut, drift.track.length - 1, true);
+
+  // Datum at each reported hour, labelled every sixth. A DRIFT DOUBLES BACK ON
+  // ITSELF — that is what a tide does — so hour labels collide where a transit's
+  // never would: +18h, +30h and +36h landed on top of each other in the first
+  // version and read as one illegible smear. Same treatment as the leg badges:
+  // remember what has been placed and drop a label rather than overprint it.
+  const lblBoxes = [];
+  drift.envelope.forEach((e, i) => {
+    const q = toScreen(e.lat, e.lon);
+    ctx.fillStyle = "#d9534f"; ctx.strokeStyle = "#05080c"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(q.x, q.y, 2.5, 0, 7); ctx.fill(); ctx.stroke();
+    if (!(i % 6 === 5 || i === drift.envelope.length - 1)) return;
+    ctx.font = "9px monospace";
+    const t = "+" + Math.round(e.hours) + "h";
+    const w = ctx.measureText(t).width + 5;
+    let box = null;
+    for (const [dx, dy] of [[4, -11], [4, 2], [-w - 6, -11], [-w - 6, 2]]){
+      const cand = {x: q.x + dx, y: q.y + dy, w: w, h: 11};
+      if (!lblBoxes.some(b => cand.x < b.x + b.w && cand.x + cand.w > b.x &&
+                              cand.y < b.y + b.h && cand.y + cand.h > b.y)){
+        box = cand; break;
+      }
+    }
+    if (!box) return;                       // crowded — the dot still marks the hour
+    lblBoxes.push(box);
+    ctx.fillStyle = "rgba(5,8,12,.85)";
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.fillStyle = "#f2a6a4"; ctx.fillText(t, box.x + 2, box.y + 8);
+  });
+
+  // EVERY COMPARED MODEL'S DATUM AND CIRCLE, in outline. Drawn under the primary
+  // and unfilled, so the answer in use stays the one that reads first while the
+  // alternatives show how far the choice could move it.
+  (drift.comparison || []).forEach(c => {
+    if (c.is_primary || c.lat == null) return;
+    const q = toScreen(c.lat, c.lon);
+    const edge = toScreen(c.lat + c.radius_nm / 60.0, c.lon);
+    const rpx = Math.abs(q.y - edge.y);
+    ctx.strokeStyle = "rgba(217,83,79,.40)"; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    if (rpx > 2){ ctx.beginPath(); ctx.arc(q.x, q.y, rpx, 0, 7); ctx.stroke(); }
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(217,83,79,.75)";
+    ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, 7); ctx.fill();
+    ctx.font = "9px monospace";
+    const w = ctx.measureText(c.key).width;
+    ctx.fillStyle = "rgba(5,8,12,.75)";
+    ctx.fillRect(q.x + 5, q.y - 5, w + 4, 11);
+    ctx.fillStyle = "#f2a6a4"; ctx.fillText(c.key, q.x + 7, q.y + 3);
+  });
+
+  // LAST KNOWN POSITION. A cross, not a dot: it is a datum of a different kind
+  // from the waypoints, and it should not read as one of them.
+  ctx.strokeStyle = "#d9534f"; ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(s.x - 7, s.y - 7); ctx.lineTo(s.x + 7, s.y + 7);
+  ctx.moveTo(s.x + 7, s.y - 7); ctx.lineTo(s.x - 7, s.y + 7);
+  ctx.stroke();
+  ctx.font = "bold 10px monospace";
+  const lbl = "LKP";
+  ctx.fillStyle = "rgba(5,8,12,.85)";
+  ctx.fillRect(s.x + 9, s.y - 16, ctx.measureText(lbl).width + 7, 13);
+  ctx.fillStyle = "#d9534f"; ctx.fillText(lbl, s.x + 12, s.y - 6);
+}
+
+function draw(){
+  const w = cvs.clientWidth, h = cvs.clientHeight, r = dpr();
+  if (cvs.width !== w * r || cvs.height !== h * r){ cvs.width = w * r; cvs.height = h * r; }
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  ctx.fillStyle = "#071019"; ctx.fillRect(0, 0, w, h);
+  drawGraticule(); drawTiles(); drawDrift(); drawLine();
+  $("#stZoom").textContent = "z" + zoom;
+}
+
+/* ---- interaction ---- */
+function hit(px, py){
+  for (let i = points.length - 1; i >= 0; i--){
+    const s = toScreen(points[i].lat, points[i].lon);
+    if (Math.hypot(s.x - px, s.y - py) < 9) return i;
+  }
+  return -1;
+}
+// Pointer capture keeps a drag alive when the cursor leaves the canvas, but it throws
+// NotFoundError for any pointerId without an active pointer. That is not hypothetical:
+// a synthetic event, or a pointer released outside the window, both reach here — and
+// an exception thrown at this point aborts the handler and leaves the drag half-armed.
+// The capture is an enhancement, so losing it must never cost the interaction.
+const grab = id => { try { cvs.setPointerCapture(id); } catch (_){ /* fine without it */ } };
+cvs.addEventListener("pointerdown", e => {
+  const r = cvs.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  moved = false;
+  const h = hit(px, py);
+  if (h >= 0 && mode === "draw"){ dragIdx = h; selIdx = h; grab(e.pointerId); draw(); return; }
+  panning = {x: e.clientX, y: e.clientY, c: {...center}};
+  grab(e.pointerId);
+});
+cvs.addEventListener("pointermove", e => {
+  const r = cvs.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const ll = toLL(px, py);
+  $("#stPos").textContent = fmtPos(ll.lat, ll.lon);
+  if (dragIdx >= 0){ points[dragIdx] = {lat: ll.lat, lon: ll.lon}; moved = true; refresh(); return; }
+  if (panning){
+    const dx = e.clientX - panning.x, dy = e.clientY - panning.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+    const o = worldPx(panning.c.lat, panning.c.lon, zoom);
+    const c = worldToLL(o.x - dx, o.y - dy, zoom);
+    center = c; draw();
+  }
+});
+cvs.addEventListener("pointerup", e => {
+  const r = cvs.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const wasDrag = dragIdx >= 0;
+  dragIdx = -1; panning = null;
+  if (wasDrag){ refresh(); return; }
+  if (moved) return;                       // a pan, not a click
+  // Setting a last known position takes precedence over drawing: it is armed
+  // deliberately, one click at a time, and it must not also drop a waypoint.
+  if (pickingLKP){
+    const ll = toLL(px, py);
+    setLKP(ll.lat, ll.lon);
+    armLKP(false);
+    return;
+  }
+  if (mode !== "draw") return;
+  const h = hit(px, py);
+  if (h >= 0){ selIdx = selIdx === h ? -1 : h; draw(); return; }
+  const ll = toLL(px, py);
+  points.push({lat: ll.lat, lon: ll.lon});
+  selIdx = -1; refresh();
+});
+cvs.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = cvs.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+  const before = toLL(px, py);
+  const nz = Math.max(3, Math.min(16, zoom + (e.deltaY < 0 ? 1 : -1)));
+  if (nz === zoom) return;
+  zoom = nz;
+  // Keep the point under the cursor fixed while zooming.
+  const after = toLL(px, py);
+  center = {lat: center.lat + (before.lat - after.lat), lon: center.lon + (before.lon - after.lon)};
+  draw();
+}, {passive: false});
+window.addEventListener("keydown", e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  if ((e.key === "Delete" || e.key === "Backspace") && selIdx >= 0){
+    points.splice(selIdx, 1); selIdx = -1; refresh(); e.preventDefault();
+  }
+  if (e.key === "z" && (e.ctrlKey || e.metaKey)){ points.pop(); refresh(); }
+});
+window.addEventListener("resize", draw);
+$("#zin").onclick = () => { zoom = Math.min(16, zoom + 1); draw(); };
+$("#zout").onclick = () => { zoom = Math.max(3, zoom - 1); draw(); };
+$("#zfit").onclick = fit;
+$("#drawBtn").onclick = () => setMode("draw");
+$("#panBtn").onclick = () => setMode("pan");
+$("#undoBtn").onclick = () => { points.pop(); selIdx = -1; refresh(); };
+$("#clrBtn").onclick = () => { points = []; plan = null; selIdx = -1; refresh(); };
+// REVERSES THE GEOMETRY, not just a display flag. Everything downstream — the leg
+// table, the ETAs, the exported Shapefile — then describes the run that was actually
+// computed, with no second convention to keep straight. The previous result is
+// dropped rather than left on screen describing the other direction.
+$("#revBtn").onclick = () => {
+  if (points.length < 2) return;
+  points.reverse();
+  if (selIdx >= 0) selIdx = points.length - 1 - selIdx;
+  plan = null;
+  $("#results").style.display = "none";
+  refresh();
+  msg("reversed — recalculate to see this direction");
+};
+function setMode(m){
+  mode = m;
+  $("#drawBtn").classList.toggle("on", m === "draw");
+  $("#panBtn").classList.toggle("on", m === "pan");
+  cvs.style.cursor = m === "draw" ? "crosshair" : "grab";
+  $("#drawHint").textContent = m === "draw"
+    ? "Click the chart to drop points. Drag a point to move it; click one and press Delete to remove it."
+    : "Drag to pan. Switch back to DRAW to add points.";
+}
+
+function fit(){
+  if (!points.length) return;
+  const las = points.map(p => p.lat), los = points.map(p => p.lon);
+  const la0 = Math.min(...las), la1 = Math.max(...las);
+  const lo0 = Math.min(...los), lo1 = Math.max(...los);
+  center = {lat: (la0 + la1) / 2, lon: (lo0 + lo1) / 2};
+  for (let z = 16; z >= 3; z--){
+    const a = worldPx(la1, lo0, z), b = worldPx(la0, lo1, z);
+    if (b.x - a.x < cvs.clientWidth * .82 && b.y - a.y < cvs.clientHeight * .82){ zoom = z; break; }
+  }
+  draw();
+}
+
+/* ---- formatting ---- */
+const pad = (v, n) => String(v).padStart(n, "0");
+function fmtPos(lat, lon){
+  const dm = (v, hemi, w) => { const s = v < 0 ? hemi[1] : hemi[0]; v = Math.abs(v);
+    const d = Math.floor(v), m = (v - d) * 60;
+    return pad(d, w) + "°" + (m < 10 ? "0" : "") + m.toFixed(3) + "'" + s; };
+  return dm(lat, "NS", 2) + "  " + dm(lon, "EW", 3);
+}
+// Overall bearing end-to-end, for the panel readout only. Equirectangular is fine
+// here: this is a heading shown to one degree, not a distance the fuel hangs off —
+// the real per-leg bearings come from the server's Vincenty solution.
+function azTo(a, b){
+  const mlon = Math.cos((a.lat + b.lat) / 2 * Math.PI / 180);
+  return (Math.atan2((b.lon - a.lon) * mlon, b.lat - a.lat) * 180 / Math.PI + 360) % 360;
+}
+const n1 = v => (v == null ? "—" : (+v).toFixed(1));
+const n2 = v => (v == null ? "—" : (+v).toFixed(2));
+// Every chip in the result row is an abbreviation of something, and the operator
+// should not have to know which of them are model names. So a chip is built with its
+// own expansion attached rather than assembled inline: the tooltip cannot then be
+// forgotten when a chip is added. `att` escapes for an ATTRIBUTE — the quote is the
+// character that matters there, and these strings interpolate model and source names.
+const att = s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+                          .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const chip = (cls, text, tip) =>
+  '<span class="chip' + (cls ? " " + cls : "") + '"' +
+  (tip ? ' title="' + att(tip) + '"' : "") + ">" + text + "</span>";
+
+/* ---- server calls ---- */
+async function jget(u){ const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.statusText); return r.json(); }
+async function jpost(u, b){
+  const r = await fetch(u, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(b)});
+  if (!r.ok) throw new Error(((await r.json().catch(() => ({}))).error) || r.statusText);
+  return r.json();
+}
+/* Keep the panels clear of the status bar, which is pinned to the bottom and floats
+   OVER them. Measured rather than assumed: the bar wraps when the window is narrow
+   AND when a long message lands in it, and a wrapped bar is tall enough to swallow
+   the last export button.
+
+   CALLED FROM `msg()` AND `boot()`, not left to a ResizeObserver. An observer on the
+   bar looked like the tidy answer and did not fire on a text-driven reflow here, so
+   the bar grew to three rows while the panels still believed it was one and the CSV
+   button went back under it. The two places that change the bar's contents now say
+   so; `resize` covers the window. */
+function fitPanels(){
+  document.documentElement.style.setProperty(
+    "--status-h", $("#status").offsetHeight + "px");
+}
+window.addEventListener("resize", fitPanels);
+
+function msg(t, cls){
+  const e = $("#stMsg"); e.textContent = t || ""; e.className = cls || "";
+  fitPanels();
+}
+function err(t){ $("#err").innerHTML = t ? '<div class="err">' + t + "</div>" : ""; }
+
+/* ---- the line changed ---- */
+let refreshTimer = null;
+function refresh(){
+  draw();
+  $("#ptcount").textContent = points.length + " pt" + (points.length === 1 ? "" : "s");
+  $("#calcBtn").disabled = points.length < 2;
+  $("#undoBtn").disabled = !points.length;
+  $("#clrBtn").disabled = !points.length;
+  $("#revBtn").disabled = points.length < 2;
+  // Name the ends in position, so the direction is legible from the panel as well as
+  // from the chart — the operator may be reading one and not the other.
+  if (points.length >= 2){
+    const a = points[0], b = points[points.length - 1];
+    const brg = Math.round(azTo(a, b));
+    $("#dirHint").innerHTML =
+      '<span style="color:var(--ok)">START</span> ' + fmtPos(a.lat, a.lon) +
+      '<br/><span style="color:var(--asv)">END</span>&nbsp;&nbsp; ' + fmtPos(b.lat, b.lon) +
+      "<br/>running " + String(brg).padStart(3, "0") + "&deg;T overall";
+  } else $("#dirHint").textContent = "";
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    if (points.length < 2){ summary = null; $("#results").style.display = "none"; return; }
+    try{
+      summary = await jpost("/api/summary", {points});
+      msg(summary.distance_nm.toFixed(2) + " NM over " + summary.legs.length + " legs"
+        + (summary.coverage && summary.coverage.available
+           ? " · current cover " + Math.round(summary.coverage.covered_fraction * 100) + "%" : ""));
+    }catch(e){ msg(e.message, "err"); }
+  }, 180);
+}
+
+/* ---- calculate ---- */
+// ONE definition of the request. Calculate, Compare and Export all send it, so a
+// setting cannot apply to one and silently not the others.
+function planBody(){
+  const wxMode = $("#wxMode").value;
+  // Blank means "full tank", and 0 means "empty" — so the test is on the STRING,
+  // not on truthiness, which would quietly turn an empty tank into a full one.
+  const ob = $("#onboard").value.trim();
+  return {
+    points, speed_kt: +$("#speed").value, mode: $("#mode").value,
+    rpm: $("#mode").value === "rpm" ? +$("#rpm").value : null,
+    config: $("#config").value, use_currents: $("#useCur").checked,
+    onboard_l: ob === "" ? null : +ob,
+    cycle: $("#cycleSel").value || null,
+    departure_utc: $("#dep").value ? $("#dep").value + ":00Z" : null,
+    fetch_weather: wxMode === "fetch",
+    weather: wxMode === "manual"
+      ? {wmo_sea_state: +$("#wmo").value, wind_speed_kt: +$("#wind").value,
+         wind_from_deg: +$("#windDir").value}
+      : null
+  };
+}
+$("#calcBtn").onclick = async () => {
+  err(""); msg("calculating…");
+  $("#cmpOut").innerHTML = "";
+  const body = planBody();
+  try{
+    plan = await jpost("/api/plan", body);
+    if (plan.error){ err(plan.error); msg(""); return; }
+    render(); draw(); msg("");
+  }catch(e){ err(e.message); msg(""); }
+};
+
+function render(){
+  $("#results").style.display = "block";
+  $("#rDist").textContent = plan.distance_nm.toFixed(2);
+  $("#rTime").textContent = plan.hhmm;
+  $("#rFuel").textContent = plan.litres.toFixed(1);
+  $("#rSog").textContent = plan.avg_sog_kt.toFixed(2);
+
+  const f = [];
+  const cov = plan.current.covered_fraction;
+  // In fixed-rev mode the speed is the ANSWER, so the range the model produced is
+  // the first thing to say — it is what you compare against the boat's own log.
+  if (plan.mode === "rpm" && plan.legs.length){
+    const s = plan.legs.map(l => l.stw_kt);
+    const lo = Math.min(...s), hi = Math.max(...s);
+    f.push(chip("ok", Math.round(plan.rpm_command) + " rpm held · " +
+      (lo.toFixed(2) === hi.toFixed(2) ? lo.toFixed(2) : lo.toFixed(2) + "–" + hi.toFixed(2)) +
+      " kt STW",
+      "The throttle was held and the vessel model worked out the speed. The spread is " +
+      "the weather: at fixed revs a head sea takes knots off, so litres per hour stays " +
+      "put and the passage gets longer. Compare this against the boat's own log speed — " +
+      "if they disagree, the difference is between this model and the controller's."));
+  }
+  if (!plan.feasible)
+    f.push(chip("bad", "LEG " + plan.infeasible_legs.join(",") + " CANNOT HOLD TRACK",
+      "The cross-track current on that leg is stronger than the boat can crab out, so " +
+      "there is no heading that holds the line. No time or fuel is claimed for it — a " +
+      "plausible slow number would be worse than an admission."));
+  f.push(chip(cov > .99 ? "ok" : cov > .5 ? "warn" : "bad",
+    "current " + Math.round(cov * 100) + "% covered" +
+    (plan.current.gap_nm > .05 ? " · " + plan.current.gap_nm.toFixed(1) + " NM gap" : ""),
+    "How much of the passage a forecast model actually reached. The gap is the length " +
+    "computed with no current at all — a regional model has a hard edge, and beyond it " +
+    "there is no data rather than slack water."));
+  if (plan.current.projected_fraction > 0.001)
+    f.push(chip("warn", Math.round(plan.current.projected_fraction * 100) + "% projected",
+      "That share of the passage falls past the end of the cached forecast, so the " +
+      "current was carried forward on the tidal cycle instead of read. Roughly 0.2 kt " +
+      "of error, and never more than three cycles out."));
+  if (plan.legs.some(l => !l.in_fit_window))
+    f.push(chip("warn", "RPM outside fitted window",
+      "RPM = engine revolutions per minute. Some leg needs revs outside the range the " +
+      "vessel's fuel curve was fitted over, so its burn is an extrapolation."));
+  const bm = plan.current_by_model || {};
+  const models = Object.keys(bm);
+  const ofsTip = ks => "Current models that supplied this passage, by share of it. " +
+    ks.map(k => k.toUpperCase() + " = " + ((cfg.ofs_names || {})[k] || "unlisted") +
+                " Operational Forecast System").join("; ") +
+    ". Each covers one region and stops at a hard edge, so a long line may need several.";
+  if (models.length > 1){
+    const tot = models.reduce((a,k)=>a+bm[k],0) || 1;
+    f.push(chip("ok", models.map(k =>
+      k.toUpperCase() + " " + Math.round(bm[k]/tot*100) + "%").join(" + "), ofsTip(models)));
+  } else if (models.length === 1){
+    f.push(chip("", models[0].toUpperCase(), ofsTip(models)));
+  }
+  const WX = {idw: "interpolated over the line from buoys, NWS gridpoints and WAVEWATCH III",
+              manual: "the single wind and sea state entered by hand, applied to every leg",
+              none: "no weather — flat calm, no premium on the revs"};
+  const wxs = plan.weather_source || "none";
+  f.push(chip("", "wx " + wxs, "wx = weather. This passage used " + (WX[wxs] || wxs) +
+    ". IDW = inverse distance weighting."));
+  if (plan.marine){
+    const byS = {};
+    plan.marine.samples.forEach(s => byS[s.source] = (byS[s.source]||0)+1);
+    const SRC = {ndbc: "NDBC = National Data Buoy Center — real observations",
+                 nws: "NWS = National Weather Service gridpoint forecast",
+                 ww3: "WW3 = WAVEWATCH III, NOAA's global wave model (waves only — it has no wind)"};
+    f.push(chip("", Object.entries(byS).map(([k,v]) => v + " " + k.toUpperCase()).join(" · "),
+      "How many sources of each kind fed the interpolation. " +
+      Object.keys(byS).map(k => SRC[k] || k.toUpperCase()).join("; ") +
+      ". Open “Weather sources” below for each one by name."));
+  }
+  // A part-full tank is a stated assumption about the BOAT, so it goes last, after
+  // the run of chips describing the water and the weather, rather than splitting them.
+  const en = plan.endurance;
+  if (en && !en.full_tank)
+    f.push(chip(en.within_reserve ? "warn" : "bad",
+      en.onboard_l.toFixed(0) + " L aboard" +
+      (en.starts_below_reserve ? " · already below the reserve floor" : ""),
+      "Computed against the fuel you entered, not a full tank. L = litres. The " +
+      en.reserve_floor_l.toFixed(0) + " L reserve floor is a fraction of the " +
+      en.capacity_l.toFixed(0) + " L TANK, so a part-full load loses the whole " +
+      "shortfall from your usable fuel."));
+  if (en && !en.within_reserve && !en.starts_below_reserve)
+    f.push(chip("bad", "FUEL SHORT BY " + Math.abs(en.margin_l).toFixed(0) + " L",
+      "The passage burns into the reserve floor. Short by " +
+      Math.abs(en.margin_l).toFixed(1) + " litres against " + en.usable_l.toFixed(0) +
+      " L usable."));
+  $("#flags").innerHTML = f.join(" ");
+
+  const tb = $("#legs tbody"); tb.innerHTML = "";
+  plan.legs.forEach(l => {
+    const tr = document.createElement("tr");
+    if (l.current_coverage < .999) tr.className = "gap";
+    tr.innerHTML =
+      '<td class="l">' + (l.index + 1) + "</td>" +
+      "<td>" + l.distance_nm.toFixed(2) + "</td>" +
+      "<td>" + Math.round(l.bearing_start) + "</td>" +
+      "<td>" + l.sog_kt.toFixed(2) + "</td>" +
+      "<td>" + (l.set_deg == null ? "—" : Math.round(l.set_deg)) + "</td>" +
+      "<td>" + l.drift_kt.toFixed(2) + "</td>" +
+      "<td>" + Math.round(l.rpm) + "</td>" +
+      "<td>" + l.hhmm + "</td>" +
+      "<td>" + l.litres.toFixed(1) + "</td>" +
+      "<td>" + (l.eta_utc ? l.eta_utc.slice(11, 16) : "—") + "</td>" +
+      "<td>" + Math.round(l.current_coverage * 100) + "</td>";
+    tr.title = (l.note ? l.note + "\n" : "") +
+      "STW (speed through the water) " + l.stw_kt.toFixed(2) +
+      " kt · along-track current " + l.along_kt.toFixed(2) +
+      " kt · premium (the fraction added to the benign revs) " +
+      (l.premium * 100).toFixed(1) + "%" +
+      (l.sea_state != null ? " · WMO sea state " + l.sea_state : "") +
+      (l.wind_kt != null ? " · wind " + l.wind_kt.toFixed(0) + " kt from " + Math.round(l.wind_from_deg) : "");
+    tr.onmouseenter = () => { hoverLeg = l.index; draw(); };
+    tr.onmouseleave = () => { hoverLeg = -1; draw(); };
+    tb.appendChild(tr);
+  });
+  const tr = document.createElement("tr"); tr.className = "tot";
+  tr.title = "TOTAL for the whole passage. Distance, time and litres are sums; SOG is " +
+    "the distance divided by the time, not the mean of the legs; the last column is the " +
+    "arrival, UTC.";
+  tr.innerHTML = '<td class="l">TOT</td><td>' + plan.distance_nm.toFixed(2) +
+    "</td><td></td><td>" + plan.avg_sog_kt.toFixed(2) + "</td><td></td><td></td><td></td><td>" +
+    plan.hhmm + "</td><td>" + plan.litres.toFixed(1) + "</td><td>" +
+    (plan.arrival_utc ? plan.arrival_utc.slice(11, 16) : "") + "</td><td></td>";
+  tb.appendChild(tr);
+
+  const wd = $("#wxDetail"), ws = $("#wxSources");
+  if (plan.marine && plan.marine.samples.length){
+    wd.style.display = "block";
+    ws.innerHTML = (plan.marine.notes||[]).join(" · ") + "<br/>" +
+      plan.marine.samples.map(s => {
+        const age = s.age_s == null ? "forecast" : Math.round(s.age_s/60) + " min old";
+        return "&nbsp;<b>" + s.source.toUpperCase() + "</b> " + (s.id||"") +
+          (s.name ? " " + s.name.slice(0,26) : "") + " — " + age +
+          " — " + s.fields.join(", ");
+      }).join("<br/>");
+  } else wd.style.display = "none";
+  const e = plan.endurance;
+  // The tank line names what is ABOARD when that is not a full tank, because the
+  // usable figure then comes from a number the operator typed and they should see it
+  // repeated back. The reserve floor is quoted in litres in that case: as a
+  // percentage it reads as a percentage of the load, which is exactly the mistake
+  // fuel.endurance refuses to make.
+  if (e) $("#endur").innerHTML =
+    "Fuel <b>" + e.used_l.toFixed(1) + " L</b> of " + e.usable_l.toFixed(0) +
+    " L usable (" +
+    (e.full_tank
+      ? e.capacity_l.toFixed(0) + " L tank less " +
+        Math.round(e.reserve_fraction * 100) + "% reserve"
+      : "<b>" + e.onboard_l.toFixed(0) + " L aboard</b> of a " +
+        e.capacity_l.toFixed(0) + " L tank, less the " +
+        e.reserve_floor_l.toFixed(0) + " L reserve floor") + ") — margin " +
+    '<b style="color:' + (e.within_reserve ? "var(--ok)" : "var(--bad)") + '">' +
+    (e.margin_l >= 0 ? "+" : "") + e.margin_l.toFixed(1) + " L</b>. " +
+    "Loiter " + plan.loiter_lph.toFixed(2) + " L/h. Departure " +
+    plan.departure_utc.slice(0, 16).replace("T", " ") + "Z, arrival " +
+    plan.arrival_utc.slice(0, 16).replace("T", " ") + "Z.";
+}
+
+/* ---- compare both directions ----
+   The honest way to answer "which way should I run this". Same line, same departure,
+   points reversed — and with a tidal current the two are genuinely different
+   passages, not the same number twice. Runs against the server so it uses the same
+   marching integration, not an estimate; the marine samples are already cached
+   server-side so the second call is cheap. */
+$("#cmpBtn").onclick = async () => {
+  if (!plan){ err("Calculate first."); return; }
+  err(""); msg("computing the other direction…");
+  const body = planBody();
+  body.points = points.slice().reverse();
+  try{
+    const other = await jpost("/api/plan", body);
+    if (other.error){ err(other.error); msg(""); return; }
+    const dh = (other.hours - plan.hours) * 60, dl = other.litres - plan.litres;
+    const sign = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(v === dh ? 0 : 1);
+    const better = dh < -0.5 ? "the reverse is quicker"
+                 : dh > 0.5 ? "as drawn is quicker" : "no meaningful difference";
+    $("#cmpOut").innerHTML =
+      "<b>As drawn</b> " + plan.hhmm + " &middot; " + plan.litres.toFixed(1) + " L &middot; " +
+      plan.avg_sog_kt.toFixed(2) + " kt<br/>" +
+      "<b>Reversed</b> " + other.hhmm + " &middot; " + other.litres.toFixed(1) + " L &middot; " +
+      other.avg_sog_kt.toFixed(2) + " kt<br/>" +
+      "Difference " + sign(dh) + " min, " + (dl >= 0 ? "+" : "−") +
+      Math.abs(dl).toFixed(1) + " L &mdash; <b>" + better + "</b> " +
+      "<span style='color:var(--ink-faint)'>(same departure " +
+      plan.departure_utc.slice(11, 16) + "Z; the tide is not the same at the far end)</span>";
+    msg("");
+  }catch(e){ err(e.message); msg(""); }
+};
+
+/* ---- export ---- */
+function buildExport(){
+  const box = $("#expBtns"); box.innerHTML = "";
+  (cfg.formats || []).forEach(f => {
+    const b = document.createElement("button");
+    const needsPlan = f.key === "csv_legs" || f.key === "shp_legs";
+    b.className = "ctl"; b.textContent = f.label;
+    b.title = f.note + (needsPlan
+      ? " — carries the computed results, so it needs a calculation first"
+      : " — geometry only, no calculation needed");
+    b.style.flex = "1 1 46%";
+    b.onclick = async () => {
+      if (needsPlan && !plan){ err("Calculate first — that export carries the results."); return; }
+      err(""); msg("exporting " + f.key + "…");
+      const body = Object.assign(planBody(), {
+        format: f.key, name: $("#expName").value || "transit",
+        utm_zone: $("#expCrs").value || null
+      });
+      try{
+        // SAVE writes the file server-side; the plain export streams it to the
+        // browser. Same bytes and the same timestamped name either way — only the
+        // destination differs.
+        if ($("#saveDisk").checked){
+          const j = await jpost("/api/save", body);
+          msg("SAVED to " + j.folder + " — " + j.saved);
+          $("#saveWhere").innerHTML = "last: <b>" + j.folder + "/" + j.saved + "</b>";
+          return;
+        }
+        const r = await fetch("/api/export", {method: "POST",
+          headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+        if (!r.ok) throw new Error(((await r.json().catch(() => ({}))).error) || r.statusText);
+        const blob = await r.blob();
+        const cd = r.headers.get("Content-Disposition") || "";
+        const fn = (cd.match(/filename="([^"]+)"/) || [, "transit"])[1];
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = fn; a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+        msg("DOWNLOADED " + fn + " — check your browser downloads");
+      }catch(e){ err(e.message); msg(""); }
+    };
+    box.appendChild(b);
+  });
+}
+
+/* ---- the emergency case ----
+   A drift is not a plan and shares nothing with planBody(): none of speed, mode,
+   config or fuel means anything to a hull with no power, and letting them ride
+   along in the request would make them look as though they did. */
+function armLKP(on){
+  pickingLKP = on;
+  $("#driftPickBtn").classList.toggle("on", on);
+  $("#driftPickBtn").textContent = on ? "click the chart… (press to cancel)"
+                                      : "Set last known position";
+  cvs.style.cursor = on ? "crosshair" : (mode === "draw" ? "crosshair" : "grab");
+  if (on) msg("click the chart to set the last known position");
+}
+function setLKP(lat, lon){
+  $("#dLat").value = lat.toFixed(4);
+  $("#dLon").value = lon.toFixed(4);
+  $("#driftChip").textContent = fmtPos(lat, lon);
+  msg("last known position " + fmtPos(lat, lon));
+}
+$("#driftPickBtn").onclick = () => armLKP(!pickingLKP);
+$("#dLat").onchange = $("#dLon").onchange = () => {
+  const la = parseFloat($("#dLat").value), lo = parseFloat($("#dLon").value);
+  if (isFinite(la) && isFinite(lo)) $("#driftChip").textContent = fmtPos(la, lo);
+};
+
+function driftBody(){
+  return {
+    lat: parseFloat($("#dLat").value), lon: parseFloat($("#dLon").value),
+    hours: +$("#dHours").value,
+    start_utc: $("#dWhen").value ? $("#dWhen").value + ":00Z" : null,
+    leeway_class: $("#dClass").value,
+    weather: wxBody()
+  };
+}
+// Blank wave boxes mean NO wave term, not a zero one — the distinction matters
+// because zero height is a claim about the sea and blank is an absence of data.
+function wxBody(){
+  const w = {wind_speed_kt: +$("#dWind").value, wind_from_deg: +$("#dWindDir").value};
+  const hs = $("#dHs").value.trim(), tp = $("#dTp").value.trim(),
+        wd = $("#dWvDir").value.trim();
+  if (hs !== "" && tp !== "" && wd !== ""){
+    w.wave_height_m = +hs; w.wave_period_s = +tp; w.wave_from_deg = +wd;
+  }
+  return w;
+}
+function dErr(t){ $("#driftErr").innerHTML = t ? '<div class="err">' + t + "</div>" : ""; }
+
+$("#driftBtn").onclick = async () => {
+  const b = driftBody();
+  if (!isFinite(b.lat) || !isFinite(b.lon)){
+    dErr("Set a last known position first — click the chart, or type one in."); return;
+  }
+  dErr(""); msg("predicting drift…");
+  try{
+    drift = await jpost("/api/drift", b);
+    renderDrift(); draw(); msg("");
+  }catch(e){ dErr(e.message); msg(""); }
+};
+// COMPARING DRIFT MODELS AGAINST A FIXED ENVIRONMENT. Same position, same time of
+// loss, same wind and swell, same cached forecast — the only thing that varies is
+// the leeway class, so every difference in the table is attributable to it and to
+// nothing else. The server runs them in ONE request for that reason: loading the
+// forecast per class would invite exactly the drift this is trying to rule out.
+$("#dCompareBtn").onclick = async () => {
+  const picked = [...document.querySelectorAll("#dCompareList input:checked")]
+    .map(i => i.value);
+  if (!picked.length){ dErr("Tick at least one class to compare."); return; }
+  const b = driftBody();
+  if (!isFinite(b.lat) || !isFinite(b.lon)){
+    dErr("Set a last known position first — click the chart, or type one in."); return;
+  }
+  b.compare_classes = picked;
+  dErr(""); msg("running " + picked.length + " drift models…");
+  try{
+    drift = await jpost("/api/drift", b);
+    renderDrift(); draw(); msg("");
+  }catch(e){ dErr(e.message); msg(""); }
+};
+
+$("#driftClrBtn").onclick = () => {
+  drift = null; $("#driftOut").style.display = "none";
+  $("#driftClrBtn").style.display = "none"; draw();
+};
+
+function renderDrift(){
+  const d = drift, last = d.envelope[d.envelope.length - 1];
+  $("#driftOut").style.display = "block";
+  $("#driftClrBtn").style.display = "block";
+  $("#dvDist").textContent = last.from_start_nm.toFixed(1);
+  $("#dvBrg").textContent = String(Math.round(last.bearing_from_start)).padStart(3, "0");
+  $("#dvRad").textContent = last.radius_nm.toFixed(1);
+  $("#driftSrc").textContent = d.current_source || "no current";
+  $("#driftSrc").title = "The forecast the advection came from.";
+
+  const f = [];
+  const cov = d.covered_fraction;
+  f.push(chip(cov > .99 ? "ok" : cov > .5 ? "warn" : "bad",
+    "current " + Math.round(cov * 100) + "% covered",
+    "The share of the prediction that had a real forecast current under it, for the " +
+    "WORST member of the ensemble — a search area is only as good as its weakest " +
+    "edge. A drift computed without a current is not a slower answer, it is a " +
+    "different and much weaker kind of answer."));
+  // THE HORIZON IS THE HEADLINE WHEN THERE IS ONE. It is the moment this stops
+  // being a prediction, and it is drawn in the alarming colour for that reason.
+  if (d.horizon_h != null)
+    f.push(chip("bad", "usable to +" + d.horizon_h.toFixed(1) + " h only",
+      "The EARLIEST hour at which any member of the ensemble ran out of data: " +
+      (d.horizon_why || "") + ". The middle of the ensemble may still be covered " +
+      "past it — this reports the first plausible drift to leave the forecast, " +
+      "because a search area is only as good as its worst edge. The track is " +
+      "dashed beyond it and those positions are extrapolation, not forecast."));
+  else
+    f.push(chip("ok", "forecast covers the whole window",
+      "Every step had a real current under it, and the window ends before the " +
+      "cached forecast does."));
+  // The swell term, when there is one. Reported as the DISTANCE it carried, which
+  // is the only form in which a tenth of a knot means anything to a search.
+  if (d.stokes_nm > 0.005)
+    f.push(chip("", "swell carried " + d.stokes_nm.toFixed(1) + " NM",
+      "Stokes drift from the swell, over the whole prediction. Only the part NOT " +
+      "running with the wind is counted: the leeway coefficients were measured with " +
+      "seas running and already hold the wind-driven waves, so adding all of it " +
+      "would count that twice. Deep water assumed." +
+      ((d.stokes_notes || []).length ? " — " + d.stokes_notes.join("; ") : "")));
+  if (d.nudged_fraction > 0.001)
+    f.push(chip("warn", Math.round(d.nudged_fraction * 100) + "% read from nearby",
+      "That share of steps sat on a dry grid node, so the current was taken from " +
+      "model water within 2 km. Normal close inshore; suspicious offshore."));
+  f.push(chip("warn",
+    "drifts as " + d.leeway.key + " (" + d.leeway.dw_slope_pct.toFixed(2) + "%)",
+    "Leeway from the published class “" + d.leeway.name + "”: " +
+    d.leeway.dw_slope_pct.toFixed(2) + "% of wind speed downwind, ±" +
+    d.leeway.cw_slope_pct.toFixed(2) + "% crosswind, measured spread " +
+    d.leeway.dw_std_cms.toFixed(1) + " cm/s. " + d.leeway.source +
+    ". NOT measured on this vessel — no leeway class exists for an unmanned " +
+    "surface vessel, so this is an analogue."));
+  $("#dvFlags").innerHTML = f.join(" ");
+
+  const tb = $("#dvTable tbody"); tb.innerHTML = "";
+  d.envelope.forEach(e => {
+    const tr = document.createElement("tr");
+    if (d.horizon_h != null && e.hours > d.horizon_h) tr.className = "gap";
+    tr.innerHTML =
+      '<td class="l">+' + e.hours.toFixed(0) + "</td>" +
+      "<td>" + e.utc.slice(5, 16).replace("T", " ") + "</td>" +
+      "<td>" + e.lat.toFixed(4) + "</td>" +
+      "<td>" + e.lon.toFixed(4) + "</td>" +
+      "<td>" + e.from_start_nm.toFixed(1) + "</td>" +
+      "<td>" + String(Math.round(e.bearing_from_start)).padStart(3, "0") + "</td>" +
+      "<td>" + e.radius_nm.toFixed(1) + "</td>";
+    if (d.horizon_h != null && e.hours > d.horizon_h)
+      tr.title = "Past the horizon — extrapolated with no forecast under it.";
+    tb.appendChild(tr);
+  });
+  $("#dvAssume").innerHTML = "<b>Assumptions.</b> " + d.assumptions.join(" ");
+
+  // The comparison, when classes were ticked. Sorted by radius so the tightest
+  // claim is at the top and the reader can see immediately what the choice costs.
+  const cmp = d.comparison || [];
+  $("#dvCompare").style.display = cmp.length ? "block" : "none";
+  if (cmp.length){
+    const prim = cmp.find(c => c.is_primary) || cmp[0];
+    const tb = $("#dvCmpTable tbody"); tb.innerHTML = "";
+    const spread = [];
+    cmp.slice().sort((a, b) => a.radius_nm - b.radius_nm).forEach(c => {
+      const off = nmBetween(prim.lat, prim.lon, c.lat, c.lon);
+      spread.push(off);
+      const tr = document.createElement("tr");
+      if (c.is_primary) tr.className = "tot";
+      tr.innerHTML =
+        '<td class="l">' + c.key + (c.is_primary ? " ◂" : "") + "</td>" +
+        "<td>" + c.from_start_nm.toFixed(1) + "</td>" +
+        "<td>" + String(Math.round(c.bearing_from_start)).padStart(3, "0") + "</td>" +
+        "<td>" + c.radius_nm.toFixed(1) + "</td>" +
+        "<td>" + (c.is_primary ? "—" : off.toFixed(1)) + "</td>" +
+        "<td>" + c.dw_std_cms.toFixed(1) + "</td>";
+      tr.title = c.name + " — " + c.dw_slope_pct.toFixed(2) + "% downwind." +
+        (c.is_primary ? " This is the class the datum and the exports use."
+                      : " Run from the same position, time and weather as the primary.");
+      tb.appendChild(tr);
+    });
+    // THE COMPARISON IS ONLY WORTH SHOWING IF IT IS READ CORRECTLY: the number that
+    // matters is how the spread BETWEEN models sits against the radius WITHIN one.
+    const worst = Math.max(...spread);
+    $("#dvCmpNote").innerHTML =
+      "Choosing a different drift model moves the datum by up to <b>" +
+      worst.toFixed(1) + " NM</b>, against a search radius of " +
+      prim.radius_nm.toFixed(1) + " NM for " + prim.key + ". " +
+      (worst > prim.radius_nm * 0.5
+        ? "<b>That is the same order as the radius itself</b> — the choice of model " +
+          "is not a detail here, and no class in the taxonomy was measured on this " +
+          "vessel."
+        : "That sits well inside the radius, so the choice of model is not what " +
+          "limits this answer.") +
+      " Environment held fixed across every row.";
+  }
+}
+
+// Great-circle distance in NM between two datums, for the comparison table.
+function nmBetween(la1, lo1, la2, lo2){
+  const R = 3440.065, r = Math.PI / 180;
+  const p1 = la1 * r, p2 = la2 * r;
+  const dp = (la2 - la1) * r, dl = (lo2 - lo1) * r;
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/* Both exports are built in the BROWSER from the result already on screen: an
+   emergency should not need a second round trip, and what gets handed over is then
+   exactly what was being looked at. */
+function driftCsv(){
+  const rows = [["hours_since_lkp", "utc", "lat", "lon", "nm_from_lkp",
+                 "bearing_from_lkp", "radius_nm", "past_horizon"]];
+  drift.envelope.forEach(e => rows.push([
+    e.hours.toFixed(2), e.utc, e.lat.toFixed(6), e.lon.toFixed(6),
+    e.from_start_nm.toFixed(3), e.bearing_from_start.toFixed(1),
+    e.radius_nm.toFixed(3),
+    (drift.horizon_h != null && e.hours > drift.horizon_h) ? "yes" : "no"]));
+  return rows.map(r => r.join(",")).join("\n") + "\n";
+}
+function driftGeoJson(){
+  const F = [];
+  F.push({type: "Feature", properties: {name: "last known position",
+      utc: drift.start.utc, kind: "lkp"},
+    geometry: {type: "Point", coordinates: [drift.start.lon, drift.start.lat]}});
+  F.push({type: "Feature",
+    properties: {name: "datum track (middle assumption)", kind: "track",
+      horizon_h: drift.horizon_h, horizon_why: drift.horizon_why},
+    geometry: {type: "LineString",
+      coordinates: drift.track.map(p => [p.lon, p.lat])}});
+  drift.envelope.forEach(e => F.push({type: "Feature",
+    properties: {name: "+" + e.hours + " h", kind: "datum", utc: e.utc,
+      radius_nm: e.radius_nm, nm_from_lkp: e.from_start_nm,
+      bearing_from_lkp: e.bearing_from_start,
+      past_horizon: drift.horizon_h != null && e.hours > drift.horizon_h},
+    geometry: {type: "Point", coordinates: [e.lon, e.lat]}}));
+  drift.members.forEach(m => F.push({type: "Feature",
+    properties: {kind: "member_end", leeway_pct: m.leeway_pct,
+      divergence_deg: m.divergence_deg, current_scale: m.current_scale},
+    geometry: {type: "Point", coordinates: [m.end.lon, m.end.lat]}}));
+  return JSON.stringify({type: "FeatureCollection",
+    properties: {generated_by: "Transit Calculator drift prediction",
+      assumptions: drift.assumptions, leeway: drift.leeway,
+      current_source: drift.current_source,
+      covered_fraction: drift.covered_fraction},
+    features: F}, null, 1);
+}
+function saveBlob(text, name, type){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  msg("DOWNLOADED " + name);
+}
+$("#dvCsv").onclick = () => { if (drift) saveBlob(driftCsv(),
+  "drift_" + drift.start.utc.slice(0, 16).replace(/[-:]/g, "") + "Z.csv", "text/csv"); };
+$("#dvJson").onclick = () => { if (drift) saveBlob(driftGeoJson(),
+  "drift_" + drift.start.utc.slice(0, 16).replace(/[-:]/g, "") + "Z.geojson",
+  "application/geo+json"); };
+
+/* ---- load ---- */
+$("#loadBtn").onclick = async () => {
+  const p = $("#sampleSel").value;
+  if (!p) { $("#fileIn").click(); return; }
+  err(""); msg("loading…");
+  try{
+    const r = await jpost("/api/load", {path: p});
+    applyLoaded(r);
+  }catch(e){ err(e.message); msg(""); }
+};
+$("#fileBtn").onclick = () => $("#fileIn").click();
+$("#fileIn").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  err(""); msg("reading " + f.name + "…");
+  try{
+    const r = await fetch("/api/upload", {method: "POST",
+      headers: {"X-Filename": f.name}, body: await f.arrayBuffer()});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    applyLoaded(j);
+  }catch(ex){ err(ex.message); msg(""); }
+  e.target.value = "";
+};
+function applyLoaded(r){
+  points = r.points; plan = null; selIdx = -1;
+  $("#expName").value = r.name || "transit";
+  const bits = [];
+  if (r.crs) bits.push("CRS " + (r.crs.epsg ? "EPSG:" + r.crs.epsg : r.crs.kind));
+  if (r.features > 1) bits.push(r.features + " features (longest used)");
+  if (r.null_shapes) bits.push(r.null_shapes + " null shape" + (r.null_shapes > 1 ? "s" : "") + " skipped");
+  $("#loadInfo").innerHTML = '<div class="hint" title="' + att(
+    "What was read from the file. CRS = coordinate reference system, the datum and " +
+    "projection its numbers were written in; EPSG is the registry that numbers them " +
+    "(EPSG:32618 is UTM zone 18 North). Coordinates are converted to WGS84 lat/lon on " +
+    "the way in. A null shape is an empty record — a deletion left behind by the " +
+    "drawing package — and is skipped, not treated as corruption.") + '">' +
+    r.points.length + " points · " + bits.join(" · ") + "</div>";
+  refresh(); fit(); msg("loaded " + (r.name || ""));
+}
+
+/* ---- localize (charts + currents) ---- */
+async function runJob(url, body, label){
+  err(""); msg(label + "…");
+  try{
+    const j = await jpost(url, body);
+    pollJob(j.id, label);
+  }catch(e){ err(e.message); msg(""); }
+}
+async function pollJob(id, label){
+  const box = $("#jobBox");
+  const tick = async () => {
+    let s;
+    try{ s = await jget("/api/job/" + id); }catch(e){ box.innerHTML = ""; return; }
+    if (s.status === "running"){
+      const p = s.progress || {};
+      const done = p.done || 0, total = p.total || 0;
+      box.innerHTML = '<div class="hint">' + label + ": " +
+        (p.stage ? p.stage : (done + "/" + total + " tiles · " + (p.fetched || 0) + " new")) +
+        '</div><progress value="' + done + '" max="' + (total || 1) + '"></progress>' +
+        '<button class="ctl" style="width:100%;margin-top:4px"' +
+        ' title="Stop the download. Everything already fetched stays in the cache."' +
+        ' onclick="cancelJob(\'' + id + '\')">Cancel</button>';
+      setTimeout(tick, 700);
+    } else {
+      const r = s.result || {};
+      box.innerHTML = '<div class="hint">' + label + " " + s.status +
+        (r.fetched != null ? ": " + r.fetched + " new, " + r.cached + " already held, " +
+          r.failed + " unavailable" : "") + (s.error ? " — " + s.error : "") + "</div>";
+      msg("");
+      if (s.kind === "currents") boot(true);
+      updateCache();
+    }
+  };
+  tick();
+}
+window.cancelJob = id => fetch("/api/job/" + id + "/cancel", {method: "POST"});
+$("#chartBtn").onclick = () => {
+  if (points.length < 2) { err("Draw or load a line first — the download is cut to its extent."); return; }
+  runJob("/api/charts/prefetch", {points, zmin: 8, zmax: 12}, "Charts");
+};
+$("#curBtn").onclick = async () => {
+  if (points.length < 2) { err("Draw or load a line first — the download is cut to its extent."); return; }
+  err(""); msg("checking which models cover this line…");
+  try{
+    const c = await jpost("/api/currents/plan", {points});
+    const have = c.models.filter(m => m.cached).length;
+    $("#jobBox").innerHTML = '<div class="hint" title="' + att(
+      "Which forecast models this line needs and how much of it each one reaches. " +
+      c.models.map(m => m.ofs.toUpperCase() + " = " +
+        ((cfg.ofs_names || {})[m.ofs] || "unlisted")).join("; ") +
+      ". A tick means that model's forecast is already on disk.") + '">Needs ' +
+      c.models.length + " model(s): " +
+      c.models.map(m => m.ofs.toUpperCase() + " " + Math.round(m.share*100) + "%" +
+        (m.cached ? " ✓" : "")).join(" · ") +
+      (c.covered_fraction < 0.999
+        ? ' — <span style="color:var(--warn)">' + Math.round((1-c.covered_fraction)*100) +
+          "% reached by no model</span>" : "") + "</div>";
+    runJob("/api/currents/fetch", {points}, "Currents");
+  }catch(e){ err(e.message); msg(""); }
+};
+async function updateCache(){
+  if (points.length < 2){ $("#cacheHint").textContent = ""; return; }
+  const las = points.map(p => p.lat), los = points.map(p => p.lon);
+  try{
+    const c = await jget("/api/charts/coverage?lat0=" + Math.min(...las) + "&lon0=" + Math.min(...los) +
+      "&lat1=" + Math.max(...las) + "&lon1=" + Math.max(...los) + "&z=8,10,12");
+    $("#cacheHint").innerHTML = "Tiles held over this line: " +
+      c.levels.map(l => "z" + l.zoom + " " + Math.round(l.fraction * 100) + "%").join(" · ");
+  }catch(e){}
+}
+
+/* ---- boot ---- */
+async function boot(quiet){
+  cfg = await jget("/api/config");
+  if (!quiet){
+    const g = $("#config"); g.innerHTML = "";
+    // Config and sea-state options are BUILT, so their tooltips are built from the
+    // same rows rather than written out here — a hand-written list of model names
+    // would be wrong the moment one is added, and wrong in a way nobody notices.
+    cfg.configs.forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.key; o.textContent = x.label;
+      o.title = x.label + ". The config is the sonar body under the hull: it sets " +
+        "the drag, and so the revs and the burn, at every speed" +
+        (x.status ? " — its curve is " + x.status : "") + ".";
+      g.appendChild(o);
+    });
+    g.value = cfg.default_config;
+    const w = $("#wmo"); w.innerHTML = "";
+    cfg.sea_table.forEach(r => {
+      const o = document.createElement("option");
+      o.value = r.wmo; o.textContent = r.wmo + " — " + r.label + " (" + r.hs_m + " m)";
+      o.title = "WMO sea state " + r.wmo + ": " + r.label + ", significant wave height " +
+        r.hs_m + " m. Adds " + (r.premium * 100).toFixed(0) +
+        "% to the revs, and the burn is convex in revs — so the fuel cost of a state " +
+        "rises faster than the premium does.";
+      w.appendChild(o);
+    });
+    w.value = 2;
+    const s = $("#sampleSel");
+    const samples = (await jget("/api/samples")).samples;
+    samples.forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.path; o.textContent = x.name + "  (" + x.path.split("/").slice(-2, -1) + ")";
+      o.title = x.name + " — found at " + x.path + ", relative to this tool.";
+      s.appendChild(o);
+    });
+    if (samples.length) s.value = samples[0].path;
+    buildExport();
+    $("#modelChip").textContent = "model " + cfg.model_version;
+    $("#modelChip").title = "Vessel model in use. Tank " +
+      (cfg.tank_l ? cfg.tank_l.toFixed(0) + " L" : "unknown") + ", reserve " +
+      Math.round(cfg.reserve_fraction * 100) + "%.";
+    // The tank volume is READ FROM THE MODEL, never written into the page: the
+    // public export ships a placeholder vessel, and a number typed into the HTML
+    // would survive the substitution and contradict it.
+    if (cfg.tank_l){
+      $("#onboard").max = cfg.tank_l;
+      $("#tankHint").textContent = "L (tank " + cfg.tank_l.toFixed(0) + ")";
+    }
+    // Leeway classes come from the module, coefficients and all, so the page never
+    // holds a second copy of a published number that could drift from it.
+    const dc = $("#dClass"); dc.innerHTML = "";
+    (cfg.leeway_classes || []).forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.key;
+      o.textContent = c.key + " — " + c.name.slice(0, 34);
+      o.title = c.name + ": " + c.dw_slope_pct.toFixed(2) + "% downwind, ±" +
+        c.cw_slope_pct.toFixed(2) + "% crosswind, measured spread " +
+        c.dw_std_cms.toFixed(1) + " cm/s. A wider spread means a wider search circle.";
+      dc.appendChild(o);
+    });
+    if (cfg.leeway_default) dc.value = cfg.leeway_default;
+    const showClass = () => {
+      const c = (cfg.leeway_classes || []).find(x => x.key === dc.value);
+      $("#dClassInfo").innerHTML = c
+        ? c.name + "<br/>" + c.dw_slope_pct.toFixed(2) + "% downwind · ±" +
+          c.cw_slope_pct.toFixed(2) + "% crosswind · spread " +
+          c.dw_std_cms.toFixed(1) + " cm/s<br/><b>not measured on this vessel</b>"
+        : "";
+    };
+    dc.onchange = showClass; showClass();
+    // The compare list is built from the same source as the dropdown, so a class
+    // added to the module appears in both without a second edit.
+    const cl = $("#dCompareList"); cl.innerHTML = "";
+    (cfg.leeway_classes || []).forEach(c => {
+      const id = "cmp_" + c.key;
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:5px;align-items:center;padding:1px 0";
+      row.innerHTML = '<input type="checkbox" id="' + id + '" value="' + c.key +
+        '" style="width:auto"/><label for="' + id +
+        '" style="flex:1;cursor:pointer;text-transform:none;font-size:9px">' +
+        c.key + "</label>";
+      row.title = c.name + " — " + c.dw_slope_pct.toFixed(2) + "% downwind, spread " +
+        c.dw_std_cms.toFixed(1) + " cm/s";
+      cl.appendChild(row);
+    });
+    // Default the ticks to a spread that BRACKETS the choice rather than flatters
+    // it: the vessel's class, the no-windage floor, and the widest-spread analogue.
+    ["seie-drogue", "sldmb", "piw-1"].forEach(k => {
+      const b = $("#cmp_" + k); if (b) b.checked = true;
+    });
+  }
+  const cs = $("#cycleSel"); cs.innerHTML = "";
+  // Empty value = let the server chain every cached model. That is the default
+  // because one OFS is one region: forcing a single cycle re-opens the domain gap
+  // it was chained to close.
+  if (cfg.cycles && cfg.cycles.length){
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "all models (chained)";
+    o.title = "Use every cached model, finest first, blending across the boundaries " +
+      "so the arrival time does not step where one hands over to the next.";
+    cs.appendChild(o);
+  }
+  // A cycle tag is MODEL_YYYYMMDD_tHHz. Spelling that out beats expecting the
+  // operator to decode "dbofs_20260813_t18z" from the shape of it.
+  (cfg.cycles || []).forEach(t => {
+    const o = document.createElement("option"); o.value = t; o.textContent = "only " + t;
+    const m = /^([a-z0-9]+)_(\d{4})(\d{2})(\d{2})_t(\d{2})z$/.exec(t);
+    o.title = m
+      ? ((cfg.ofs_names || {})[m[1]] || m[1].toUpperCase()) + " Operational Forecast " +
+        "System, the " + m[5] + ":00 UTC run of " + m[2] + "-" + m[3] + "-" + m[4] +
+        ". Forcing one model re-opens any part of the line it does not reach."
+      : "One cached forecast cycle. Forcing one model re-opens any part of the line " +
+        "it does not reach.";
+    cs.appendChild(o);
+  });
+  if (!cfg.cycles.length){
+    const o = document.createElement("option"); o.value = ""; o.textContent = "none cached";
+    cs.appendChild(o);
+  }
+  // The drift defaults to the cycle start for the same reason the passage does: a
+  // forecast fetched yesterday cannot answer for this afternoon, and defaulting to
+  // "now" would put the very first step on the projection path.
+  if (!$("#dWhen").value)
+    $("#dWhen").value = cfg.cycle ? cfg.cycle.start_utc.slice(0, 16)
+                                  : new Date().toISOString().slice(0, 16);
+  if (cfg.cycle){
+    $("#stCycle").textContent = "currents " + cfg.cycle.tag +
+      " (" + cfg.cycle.start_utc.slice(5, 16).replace("T", " ") + "Z → " +
+      cfg.cycle.end_utc.slice(5, 16).replace("T", " ") + "Z)";
+    if (!$("#dep").value)
+      $("#dep").value = cfg.cycle.start_utc.slice(0, 16);
+  } else {
+    $("#stCycle").textContent = "no currents cached";
+    if (!$("#dep").value) $("#dep").value = new Date().toISOString().slice(0, 16);
+  }
+  const tiles = (cfg.chart_cache || []).reduce((a, b) => a + b.local + b.fallback, 0);
+  $("#stChart").textContent = tiles.toLocaleString() + " tiles held" +
+    (cfg.fallback_roots.length ? " (incl. console cache)" : "");
+  fitPanels();          // the cycle and tile counts just landed in the bar
+}
+$("#wxMode").onchange = () => {
+  $("#wxManual").style.display = $("#wxMode").value === "manual" ? "block" : "none";
+};
+// In fixed-rev mode the speed is an output, so its box goes away rather than sit
+// there being ignored.
+$("#mode").onchange = () => {
+  const rev = $("#mode").value === "rpm";
+  $("#rpmRow").style.display = rev ? "flex" : "none";
+  $("#speedRow").style.display = rev ? "none" : "flex";
+};
+
+// The label is the natural thing to hover, but the explanation lives on the control
+// beside it. Copy it across once at boot rather than writing every string twice —
+// two copies of the same sentence drift, and the label's is the one nobody updates.
+document.querySelectorAll(".frow").forEach(row => {
+  const lab = row.querySelector("label");
+  if (!lab || lab.title) return;
+  const ctl = row.querySelector("input[title],select[title],textarea[title]");
+  if (ctl) lab.title = ctl.title;
+});
+
+setMode("draw");
+boot().then(() => { refresh(); draw(); }).catch(e => err("startup: " + e.message));
+</script>
+</body>
+</html>

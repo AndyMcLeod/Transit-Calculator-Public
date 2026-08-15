@@ -1,0 +1,136 @@
+{
+ "_about": "PLACEHOLDER VESSEL MODEL. These coefficients are INVENTED, not measured: they are round numbers chosen to be physically plausible for a small diesel survey ASV so the worked examples run. Do not use them to plan a real mission. Replace this file with your own vessel's fitted laws.",
+ "version": "placeholder-1.0.0",
+ "generated": "2026-08-15",
+ "fuel_vs_rpm": {
+  "_doc": "Fallback fuel law, L/h = f0 + f1 * RPM. Invented.",
+  "fitted": false,
+  "f0": -1.8,
+  "f1": 0.0025,
+  "valid_rpm_min": 1000,
+  "valid_rpm_max": 2500
+ },
+ "configs": {
+  "_doc": "Two example sensor/pod configurations on one hull. Invented.",
+  "default": "config_a",
+  "options": {
+   "config_a": {
+    "label": "Config A (lighter pod)",
+    "status": "placeholder",
+    "status_note": "Invented coefficients. Not a measurement.",
+    "speed_vs_rpm": {
+     "b": 0.5,
+     "m": 0.00345,
+     "r2": null,
+     "source": "placeholder"
+    },
+    "fuel_vs_rpm": {
+     "kind": "quadratic",
+     "q0": 2.9,
+     "q1": -0.003,
+     "q2": 1.5e-06,
+     "r2": null,
+     "valid_rpm_min": 1400,
+     "valid_rpm_max": 3100,
+     "source": "placeholder"
+    },
+    "loiter": {
+     "lph": 1.0,
+     "rpm": 1000,
+     "_doc": "Invented station-keeping burn."
+    }
+   },
+   "config_b": {
+    "label": "Config B (heavier pod)",
+    "status": "placeholder",
+    "status_note": "Invented. Carries no fuel law of its own, so it falls back to the model-wide fuel_vs_rpm \u2014 which is exactly the fallback path the tests cover.",
+    "speed_vs_rpm": {
+     "b": 1.1,
+     "m": 0.00262,
+     "r2": null,
+     "source": "placeholder"
+    }
+   }
+  }
+ },
+ "tank_volume": {
+  "_doc": "Example tank volume.",
+  "fitted": false,
+  "litres": 250.0
+ },
+ "reserve": {
+  "_doc": "Return with at least this fraction indicated. Policy.",
+  "fitted": false,
+  "default_fraction": 0.25
+ },
+ "heading_effect": {
+  "_doc": "MEASURED magnitude, ASSUMED shape. The 2024 four-heading prop-efficiency test showed a speed spread of +/-6.91% about the four-heading mean at constant RPM, across three tests at two very different RPM settings. That spread mixes wind, sea and current and cannot be decomposed from the available data. The planner applies it as a cosine modulation on required RPM: premium = amplitude * cos(theta), where theta is the angle between the leg course and the direction the wind is coming FROM. Head-on gives the full penalty, following gives the full credit, beam gives none. Scaling with wind speed relative to the reference is an assumption; set wind_exponent to 0 to disable scaling entirely.",
+  "fitted": false,
+  "amplitude_at_reference": 0.06913210895349385,
+  "amplitude_source": "Variation!H47 \u2014 mean of three four-heading tests",
+  "reference_wind_kt": 12.0,
+  "reference_wind_source": "Ops_2022 mean recorded wind over the 2022 operational window",
+  "wind_exponent": 2.0
+ },
+ "sea_state_premium": {
+  "_doc": "ASSUMPTION, NOT A FIT. The workbook contains exactly one (sea state, RPM premium) pair: the 2022 operational window ran at Beaufort 3-4 / WMO 2-3 and needs somewhere between 0% and 13% depending on which tank capacity is believed. Binning that window by heave to measure the relationship directly fails outright \u2014 see Sensitivity section D. The table below interpolates through that single anchor and extrapolates beyond it on judgement alone. Treat it as a dial to be turned, not a measurement. Codes 5 and above are past the conditions this vehicle surveys in.",
+  "fitted": false,
+  "anchor": "WMO 2-3 supports 0.00 to 0.13 (2022 window); defaults sit inside that bracket. MEASURED calm anchor (flight-log, Aug 2026): across 11k steady-cruise samples at heave-std 0.03-0.13 m (WMO ~1-2), fuel residuals against the measured quadratic law show no motion-driven premium above a +/-2% noise floor \u2014 the table's low end is confirmed. The slope into rough water remains unmeasured; only rough-weather runs can fix it.",
+  "table": [
+   {
+    "wmo": 0,
+    "label": "Calm (glassy)",
+    "hs_m": "0",
+    "premium": 0.0
+   },
+   {
+    "wmo": 1,
+    "label": "Calm (rippled)",
+    "hs_m": "0 - 0.1",
+    "premium": 0.01
+   },
+   {
+    "wmo": 2,
+    "label": "Smooth",
+    "hs_m": "0.1 - 0.5",
+    "premium": 0.03
+   },
+   {
+    "wmo": 3,
+    "label": "Slight",
+    "hs_m": "0.5 - 1.25",
+    "premium": 0.08
+   },
+   {
+    "wmo": 4,
+    "label": "Moderate",
+    "hs_m": "1.25 - 2.5",
+    "premium": 0.18
+   },
+   {
+    "wmo": 5,
+    "label": "Rough",
+    "hs_m": "2.5 - 4",
+    "premium": 0.35
+   },
+   {
+    "wmo": 6,
+    "label": "Very rough",
+    "hs_m": "4 - 6",
+    "premium": 0.6
+   }
+  ]
+ },
+ "capacity_options": {
+  "_doc": "Example gauge-span options.",
+  "fitted": false,
+  "default": "nominal",
+  "options": [
+   {
+    "key": "nominal",
+    "litres": 250.0,
+    "label": "250 L - example tank volume"
+   }
+  ]
+ }
+}

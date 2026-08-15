@@ -1,0 +1,22 @@
+# Shapefile components are BINARY. Without this, git's autocrlf on Windows can
+# rewrite 0x0A bytes inside the geometry and the .shp opens as garbage — a corruption
+# that survives a clean `git status` because git thinks it converted a text file
+# correctly. The sample line here is read by the test suite, so it has to come back
+# byte-identical from a fresh clone.
+*.shp binary
+*.shx binary
+*.dbf binary
+*.sbn binary
+*.sbx binary
+*.zip binary
+*.png binary
+*.ico binary
+*.gz  binary
+
+# .prj / .cpg / .qmd are text and may normalise.
+*.prj text
+*.cpg text
+*.qmd text
+
+# Keep the launcher CRLF — cmd.exe is happier with it.
+*.bat text eol=crlf

@@ -1,0 +1,35 @@
+# Caches — all regenerable, none of it source.
+#
+# charts/     NOAA ENC raster tiles. Grows to gigabytes on a localized area, and the
+#             app reads through to the ASV console's copy anyway.
+# ofs_cache/  Downloaded current forecasts (~19 MB for this line, more for others).
+#             A cycle is stale within hours; committing one would pin the repo to a
+#             particular afternoon's tide and be wrong by the time anyone cloned it.
+#             domains.json lives here too — a probe cache, rebuilt in ~4 seconds.
+charts/
+ofs_cache/
+
+__pycache__/
+*.py[cod]
+
+# Atomic-write temporaries (tile fetch, domain cache)
+*.part
+*.part.*
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Desktop shortcut: a binary carrying absolute paths for ONE machine.
+# tools/make_shortcut.ps1 rebuilds it anywhere.
+*.lnk
+
+# Rasterised document pages: a VERIFICATION artifact, regenerated on demand by
+# tools/render_docs.py. The .docx and .pdf in docs/ are the deliverables.
+tools/pages/
+
+# Saved missions: working outputs that accumulate, not source. The manuals in
+# docs/ ARE tracked; these are not.
+docs/missions/
